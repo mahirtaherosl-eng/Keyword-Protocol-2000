@@ -20,7 +20,9 @@ Phone
 Join the access point printed at boot, then open the IP printed there
 (normally http://192.168.4.1/). "localhost" on the phone refers to the phone
 itself, not the ESP32. The AP has no internet access; if the phone warns
-about this, choose to stay connected.
+about this, choose to stay connected. The page also mirrors this script's
+console output in a scrolling Console panel below the table; set DEBUG_LEVEL
+above DEBUG_NONE to include KWP2000 debug messages.
 
 Kawasaki values
 ---------------
@@ -84,6 +86,7 @@ RECONNECT_MIN_MS = 2000
 RECONNECT_MAX_MS = 60000
 CLIENT_TIMEOUT_S = 0.5           # allow a slow phone to send all headers
 MAX_REQUEST_BYTES = 2048         # cap the request-header read
+LOG_LIMIT = 50                   # console lines kept for the browser
 MAX_CLIENTS_PER_LOOP = 2
 DEBUG_LEVEL = KWP2000.DEBUG_NONE   # DEBUG_DEFAULT during bring-up
 
@@ -111,6 +114,40 @@ STATE = {
 
 
 # ---------------------------------------------------------------------------
+# Console log (mirrored to the browser)
+# ---------------------------------------------------------------------------
+
+LOG_LINES = []
+
+
+def _uptime_str():
+    seconds = (time.ticks_ms() // 1000) % 86400
+    return "%02d:%02d:%02d" % (
+        seconds // 3600, (seconds // 60) % 60, seconds % 60
+    )
+
+
+def log(message):
+    """Print to serial and append a timestamped copy for the browser."""
+    message = str(message)
+    print(message)
+    LOG_LINES.append("%s %s" % (_uptime_str(), message))
+    if len(LOG_LINES) > LOG_LIMIT:
+        del LOG_LINES[0]
+
+
+class BrowserLogStream:
+    """Forward KWP2000 debug output to the serial console and browser."""
+
+    def write(self, text):
+        text = str(text)
+        for line in text.splitlines():
+            if line:
+                log(line)
+        return len(text)
+
+
+# ---------------------------------------------------------------------------
 # Web page (no external assets, so it works on the internet-less AP)
 # ---------------------------------------------------------------------------
 
@@ -132,6 +169,12 @@ _HTML_TEMPLATE = b"""<!doctype html>
        font-variant-numeric: tabular-nums; }
   #status { color: #aaa; font-size: .9rem; margin-top: 1rem; }
   .note { color: #777; font-size: .8rem; line-height: 1.4; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; color: #8ecae6; }
+  #log { margin: 0; padding: .75rem; height: 12rem; overflow-y: auto;
+         background: #0a0a0a; border: 1px solid #2c2c2c;
+         border-radius: .4rem; color: #bbb;
+         font: .75rem/1.4 ui-monospace, Menlo, Consolas, monospace;
+         white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -147,6 +190,8 @@ _HTML_TEMPLATE = b"""<!doctype html>
 <p class="note">Speed and TPS are raw ECU bytes, not km/h or percent.
 Gear is the raw GPS (Gear Position Sensor) byte. RPM is computed by the
 library from the two RPM bytes.</p>
+<h2>Console</h2>
+<pre id="log" aria-live="polite"></pre>
 </main>
 <script>
 function fmt(v) {
@@ -173,6 +218,14 @@ function refresh() {
         text += " [" + d.errors.join(", ") + "]";
       }
       document.getElementById("status").textContent = text;
+
+      var logEl = document.getElementById("log");
+      var atBottom = logEl.scrollTop + logEl.clientHeight >=
+                     logEl.scrollHeight - 8;
+      logEl.textContent = (d.log || []).join(String.fromCharCode(10));
+      if (atBottom) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
     })
     .catch(function () {
       document.getElementById("status").textContent = "ESP32 unreachable";
@@ -200,8 +253,8 @@ def start_ap():
     ap.active(True)
     ap.config(essid=SSID, password=PASSWORD)
     ip = ap.ifconfig()[0]
-    print("WiFi AP:", SSID)
-    print("Open in a browser: http://%s/  (not localhost)" % ip)
+    log("WiFi AP: %s" % SSID)
+    log("Open in a browser: http://%s/  (not localhost)" % ip)
     return ap
 
 
@@ -309,6 +362,7 @@ def build_status_json():
         "poll_ok": STATE["poll_ok"],
         "age_s": age_s,
         "errors": STATE["errors"],
+        "log": LOG_LINES,
     }).encode()
 
 
@@ -340,8 +394,8 @@ def poll_sensors(ecu):
     if STATE["poll_ok"]:
         STATE["last_ok_ms"] = time.ticks_ms()
     else:
-        print("sensor poll incomplete: code=%s nrc=%s new=0x%04X errors=%s" %
-              (ecu.last_response_code, ecu.last_nrc, new_errors, ecu.errors))
+        log("sensor poll incomplete: code=%s nrc=%s new=0x%04X errors=%s" %
+            (ecu.last_response_code, ecu.last_nrc, new_errors, ecu.errors))
 
 
 # ---------------------------------------------------------------------------
@@ -353,14 +407,14 @@ def create_uart():
     try:
         return UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
     except OSError as exc:
-        print("UART%d init failed on TX=%s RX=%s: %s" %
-              (UART_ID, TX_PIN, RX_PIN, exc))
-        print("The pins or UART id are reserved on this board.")
-        print("ESP32-C6: use UART_ID=1, TX_PIN=10, RX_PIN=11.")
-        print("  UART0/GPIO16-17 is the REPL; there is no normal UART2.")
-        print("ESP32 classic/WROOM: UART_ID=2, TX_PIN=17, RX_PIN=16.")
-        print("ESP32-WROVER/PICO: avoid GPIO16/17 (PSRAM); try 25/26.")
-        print("Rewire the interface to the configured pins, then retry.")
+        log("UART%d init failed on TX=%s RX=%s: %s" %
+            (UART_ID, TX_PIN, RX_PIN, exc))
+        log("The pins or UART id are reserved on this board.")
+        log("ESP32-C6: use UART_ID=1, TX_PIN=10, RX_PIN=11.")
+        log("  UART0/GPIO16-17 is the REPL; there is no normal UART2.")
+        log("ESP32 classic/WROOM: UART_ID=2, TX_PIN=17, RX_PIN=16.")
+        log("ESP32-WROVER/PICO: avoid GPIO16/17 (PSRAM); try 25/26.")
+        log("Rewire the interface to the configured pins, then retry.")
         raise
 
 
@@ -368,7 +422,7 @@ def main():
     uart = create_uart()
     ecu = KWP2000(uart, BRAND, tx_pin=TX_PIN, rx_pin=RX_PIN)
     if DEBUG_LEVEL:
-        ecu.enable_debug(level=DEBUG_LEVEL)
+        ecu.enable_debug(stream=BrowserLogStream(), level=DEBUG_LEVEL)
 
     ap = start_ap()
     server = open_server()
@@ -386,17 +440,17 @@ def main():
                 STATE["connected"] = False
                 STATE["poll_ok"] = False
                 if time.ticks_diff(now, next_connect) >= 0:
-                    print("Connecting to ECU...")
+                    log("Connecting to ECU...")
                     if ecu.connect():
-                        print("ECU connected")
+                        log("ECU connected")
                         STATE["connected"] = True
                         STATE["errors"] = list(ecu.errors)
                         backoff = RECONNECT_MIN_MS
                         next_poll = time.ticks_ms()
                     else:
-                        print("connect failed: code=%s nrc=%s errors=%s" %
-                              (ecu.last_response_code, ecu.last_nrc,
-                               ecu.errors))
+                        log("connect failed: code=%s nrc=%s errors=%s" %
+                            (ecu.last_response_code, ecu.last_nrc,
+                             ecu.errors))
                         STATE["errors"] = list(ecu.errors)
                         next_connect = time.ticks_add(
                             time.ticks_ms(), backoff
@@ -406,7 +460,7 @@ def main():
                 continue
 
             if not ecu.keep_alive(KEEPALIVE_INTERVAL_MS):
-                print("link lost:", ecu.errors)
+                log("link lost: %s" % (ecu.errors,))
                 STATE["connected"] = False
                 STATE["poll_ok"] = False
                 STATE["errors"] = list(ecu.errors)
@@ -426,7 +480,7 @@ def main():
 
                 # A long failed poll may have passed the 2 s link expiry.
                 if not ecu.keep_alive(KEEPALIVE_INTERVAL_MS):
-                    print("link lost after poll:", ecu.errors)
+                    log("link lost after poll: %s" % (ecu.errors,))
                     STATE["connected"] = False
                     STATE["poll_ok"] = False
                     STATE["errors"] = list(ecu.errors)
@@ -441,13 +495,13 @@ def main():
             server.close()
         except OSError:
             pass
-        print("Disconnecting ECU (up to ~8.5 s)...")
+        log("Disconnecting ECU (up to ~8.5 s)...")
         ecu.disconnect()
         try:
             ap.active(False)
         except OSError:
             pass
-        print("Stopped")
+        log("Stopped")
 
 
 if __name__ == "__main__":

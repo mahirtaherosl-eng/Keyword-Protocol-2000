@@ -232,7 +232,10 @@ there is no normal UART2, so the classic UART2/17/16 profile fails with
 | ESP32-WROVER / PICO | 2 | 25 | 26 |
 
 On the C6, GPIO18/19 or GPIO22/23 are alternatives if GPIO10/11 are not
-exposed. Edit `SSID` and `PASSWORD` at the top as well.
+exposed. Edit `SSID` and `PASSWORD` at the top as well. The page also has a
+scrolling **Console** panel that mirrors the script's serial output; set
+`DEBUG_LEVEL` to `KWP2000.DEBUG_DEFAULT` or `DEBUG_VERBOSE` to include
+KWP2000 debug messages.
 
 ## Differences from the Arduino library
 
