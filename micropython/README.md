@@ -237,6 +237,55 @@ scrolling **Console** panel that mirrors the script's serial output; set
 `DEBUG_LEVEL` to `KWP2000.DEBUG_DEFAULT` or `DEBUG_VERBOSE` to include
 KWP2000 debug messages.
 
+#### K-line troubleshooting
+
+If `connect()` fails, the Console shows a line such as
+`connect failed: code=-1 nrc=None errors=('start', 'echo')`.
+
+| Error names | Meaning | Check |
+| --- | --- | --- |
+| `start` + `code=-1` | No valid ECU response | K-line pin, module TX/RX, pull-up, ignition, fast-init |
+| `echo` | Echo bytes do not match what was sent | Module RX output -> ESP32 RX, module inversion, floating RX |
+| `checksum`, `header`, `from`, `to` | Bytes arrive but the frame is malformed | Baud/timing, ground, K-line noise |
+| `config`, `unsupported` | Key bytes/protocol rejected | Bike model/protocol compatibility |
+
+Set `DEBUG_LEVEL = KWP2000.DEBUG_VERBOSE` to log every byte. With the ignition
+on, the first attempt should show `Sending: 81 11 F1 81 04` followed by five
+`Echo:` lines. Matching echoes mean the local RX path works; random or
+inverted echoes mean the module/ESP32 RX wiring is wrong.
+
+L9637/MC33660 wiring (datasheet pin functions, not module header labels):
+
+| L9637 pin | Function | Connect to |
+| --- | --- | --- |
+| 4 | TX input | ESP32 GPIO10 |
+| 1 | RX output | ESP32 GPIO11 |
+| 5 | GND | common ground |
+| 3 | VCC (3.0-7.0 V) | 3.3 V |
+| 6 | K-line | bike K-line |
+
+Module headers often label "TX"/"RX" from either the MCU or the module side;
+verify the direction against the module schematic. The K-line needs a
+510 ohm-5 kohm pull-up to 12 V (usually in the bike or module).
+
+Bike-side checks:
+
+- Find the K-line pin in the Versys 650 service manual; do not identify it by
+  12 V alone, because other connector pins are also at 12 V.
+- With the bike off, check continuity from the module K pin to that connector
+  pin.
+- Do not connect K to battery +12 V.
+- Confirm the ESP32, module, and bike grounds are common.
+
+With a scope or logic analyzer during connect, GPIO10 should show ~1 s high,
+~25 ms low, ~25 ms high, then the request bytes. The module K pin and the bike
+K-line should show the same wake-up pulse and request bytes. If the K-line
+never shows them, the problem is before the bus (module TX pin/wiring); if it
+does and the ECU stays silent, check the bike pin, ECU state, and fast-init
+timing. Power-cycle the bike and retry once. If possible, run the C++
+`basic_working` sketch with the same interface and bike to separate a
+port/timing issue from a hardware issue.
+
 ## Differences from the Arduino library
 
 - Pythonic, snake_case API with properties instead of `get*()` methods, and

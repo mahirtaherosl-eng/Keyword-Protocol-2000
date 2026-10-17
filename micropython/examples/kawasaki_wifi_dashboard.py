@@ -136,6 +136,12 @@ def log(message):
         del LOG_LINES[0]
 
 
+def _hex(data):
+    if not data:
+        return "<none>"
+    return " ".join(["%02X" % b for b in data])
+
+
 class BrowserLogStream:
     """Forward KWP2000 debug output to the serial console and browser."""
 
@@ -430,6 +436,8 @@ def main():
     next_connect = time.ticks_ms()
     next_poll = time.ticks_ms()
     backoff = RECONNECT_MIN_MS
+    last_connect_errors = None
+    kline_hint_shown = False
 
     try:
         while True:
@@ -446,11 +454,26 @@ def main():
                         STATE["connected"] = True
                         STATE["errors"] = list(ecu.errors)
                         backoff = RECONNECT_MIN_MS
+                        last_connect_errors = None
                         next_poll = time.ticks_ms()
                     else:
                         log("connect failed: code=%s nrc=%s errors=%s" %
                             (ecu.last_response_code, ecu.last_nrc,
                              ecu.errors))
+                        if ecu.errors != last_connect_errors:
+                            log("  frame options: %s" %
+                                (ecu.frame_options,))
+                            log("  last response: %s" %
+                                _hex(ecu.last_response))
+                            log("  last payload: %s" %
+                                _hex(ecu.last_response_payload))
+                            last_connect_errors = ecu.errors
+                        if not kline_hint_shown:
+                            log("K-line tip: module TX->GPIO10, "
+                                "module RX<-GPIO11, common ground;")
+                            log("  check the bike's K-line pin and set "
+                                "DEBUG_LEVEL=DEBUG_VERBOSE.")
+                            kline_hint_shown = True
                         STATE["errors"] = list(ecu.errors)
                         next_connect = time.ticks_add(
                             time.ticks_ms(), backoff
