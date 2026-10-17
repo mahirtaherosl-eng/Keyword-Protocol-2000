@@ -71,6 +71,16 @@ This documentation has been automatically generated with doxygen + doxylite, an 
 See it here [documentation](documentation.md)
 
 
+# MicroPython
+A self-contained MicroPython port lives in [`micropython/`](micropython/README.md). Suzuki and Kawasaki are supported; Yamaha and Honda remain stubs. Install it with:
+
+```sh
+mpremote mip install github:aster94/Keyword-Protocol-2000
+```
+
+See the [MicroPython README](micropython/README.md) for wiring, the API reference and the [basic example](micropython/examples/basic_working.py).
+
+
 # Disclaimer
 I do not assume and hereby disclaim any liability to any party for any damage to propriety or person
 
