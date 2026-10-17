@@ -75,10 +75,10 @@ See it here [documentation](documentation.md)
 A self-contained MicroPython port lives in [`micropython/`](micropython/README.md). Suzuki and Kawasaki are supported; Yamaha and Honda remain stubs. Install it with:
 
 ```sh
-mpremote mip install github:aster94/Keyword-Protocol-2000
+mpremote mip install github:mahirtaherosl-eng/Keyword-Protocol-2000
 ```
 
-See the [MicroPython README](micropython/README.md) for wiring, the API reference and the [basic example](micropython/examples/basic_working.py).
+See the [MicroPython README](micropython/README.md) for wiring, the API reference and the [basic example](micropython/examples/basic_working.py). AI coding agents should start with the [AI handover notes](micropython/AI_HANDOVER.md).
 
 
 # Disclaimer

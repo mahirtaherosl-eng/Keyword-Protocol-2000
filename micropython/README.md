@@ -13,13 +13,16 @@ KWP2000 / ISO 14230 over a 12 V K-line to motorbike ECUs.
 The port is a single file, [`kwp2000.py`](kwp2000.py), with no third-party
 dependencies.
 
+> **AI coding agents:** see [`AI_HANDOVER.md`](AI_HANDOVER.md) for exact API semantics,
+> timing/blocking rules, runnable program templates, and a validation checklist.
+
 ## Installation
 
 Using [`mip`](https://docs.micropython.org/en/latest/reference/packages.html)
-from the repository root manifest:
+from the root manifest of the `mahirtaherosl-eng/Keyword-Protocol-2000` fork:
 
 ```sh
-mpremote mip install github:aster94/Keyword-Protocol-2000
+mpremote mip install github:mahirtaherosl-eng/Keyword-Protocol-2000
 ```
 
 This installs `kwp2000.py` into the board's `lib` directory.
@@ -34,7 +37,7 @@ Older `mip` versions that do not resolve relative manifest URLs can install the
 file directly:
 
 ```sh
-mpremote mip install github:aster94/Keyword-Protocol-2000/micropython/kwp2000.py
+mpremote mip install github:mahirtaherosl-eng/Keyword-Protocol-2000/micropython/kwp2000.py
 ```
 
 ## Wiring
@@ -206,6 +209,16 @@ it from the REPL and use:
 | `p` | print status |
 | `c` | disconnect |
 | `?` | help |
+
+### WiFi dashboard (ESP32, Kawasaki)
+
+[`examples/kawasaki_wifi_dashboard.py`](examples/kawasaki_wifi_dashboard.py)
+starts a WiFi access point and serves a phone-friendly dashboard with Gear
+(GPS raw), RPM, Speed (raw byte), and TPS (raw byte). Join the AP and open the
+IP printed at boot (normally `http://192.168.4.1/`); `localhost` on the phone
+refers to the phone itself. Edit `SSID`, `PASSWORD`, `TX_PIN`, and `RX_PIN` at
+the top of the example. The AP has no internet access; if the phone warns
+about this, choose to stay connected.
 
 ## Differences from the Arduino library
 
