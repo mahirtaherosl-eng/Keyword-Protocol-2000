@@ -82,7 +82,8 @@ KEEPALIVE_INTERVAL_MS = 1000  # must stay <= 2000
 LOOP_SLEEP_MS = 20
 RECONNECT_MIN_MS = 2000
 RECONNECT_MAX_MS = 60000
-CLIENT_TIMEOUT_S = 0.25
+CLIENT_TIMEOUT_S = 0.5           # allow a slow phone to send all headers
+MAX_REQUEST_BYTES = 2048         # cap the request-header read
 MAX_CLIENTS_PER_LOOP = 2
 DEBUG_LEVEL = KWP2000.DEBUG_NONE   # DEBUG_DEFAULT during bring-up
 
@@ -244,12 +245,18 @@ def serve_pending(server):
 
         try:
             client.settimeout(CLIENT_TIMEOUT_S)
+            # Read the complete request header block. Closing a socket with
+            # unread data makes lwIP send RST instead of FIN, which browsers
+            # report as a reset connection.
             request = b""
-            while b"\r\n" not in request and len(request) < 512:
-                chunk = client.recv(128)
+            while (b"\r\n\r\n" not in request and
+                   len(request) < MAX_REQUEST_BYTES):
+                chunk = client.recv(256)
                 if not chunk:
                     break
                 request += chunk
+            if b"\r\n\r\n" not in request:
+                continue
 
             line = request.split(b"\r\n", 1)[0]
             parts = line.split()
