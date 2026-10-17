@@ -89,11 +89,11 @@ else:
   GPIO to generate the fast-init waveform.
 - `rx_pin` (int or `machine.Pin`) is used when the UART is re-initialized. It is optional but
   strongly recommended.
-- The UART is **never deinitialized**. `connect()` reinitializes it with `tx`/`rx` so the
-  peripheral reattaches after the GPIO waveform.
+- When `uart_id` is supplied, `connect()` deinitializes the UART before the fast-init waveform
+  and creates a fresh `machine.UART` afterward, mirroring the C++ `end()`/`begin()` lifecycle.
+  Without `uart_id`, it reinitializes the existing UART with `tx`/`rx` after the waveform.
 - If `uart_kwargs` contains `"pins"`, the library does **not** add `tx`/`rx`. Use that for ports
   whose `UART.init()` takes a `pins=` tuple instead.
-- If `UART.init()` fails and `uart_id` is supplied, the library creates a new `machine.UART`.
 
 ### 2.3 Board examples `[P]`
 
@@ -118,17 +118,18 @@ from machine import UART
 from kwp2000 import KWP2000
 
 UART_ID = 1
-TX_PIN = 10
-RX_PIN = 11
+TX_PIN = 19
+RX_PIN = 20
 
 uart = UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
 ecu = KWP2000(uart, "kawasaki", tx_pin=TX_PIN, rx_pin=RX_PIN)
 ```
 
-On the generic C6 firmware UART0 (GPIO16/17) is reserved for the REPL and there is no
-normal UART2, so `UART(2, tx=17, rx=16)` raises `OSError: [Errno 1] EPERM: ESP_FAIL`.
-GPIO10/11 are free on the C6 DevKitC-1; GPIO18/19 or GPIO22/23 are alternatives. Avoid
-GPIO4/5/8/9/15 (strapping), 12/13 (USB), 16/17 (UART0), and 24-30 (SPI flash).
+The dashboard also switches the L9637 logic VCC from GPIO22 (high while running, low on exit).
+On the generic C6 firmware UART0 (GPIO16/17) is reserved for the REPL; GPIO10/11 are unusable on
+this board (a loopback returned 0x00). Use UART1 pins that pass a plain loopback; 19/20 are the
+dashboard defaults, and 1/2 or 18/19 are alternatives. Avoid GPIO4/5/8/9/15 (strapping), 12/13
+(USB), 16/17 (UART0), and 24-30 (SPI flash).
 
 **Raspberry Pi Pico / RP2040** (adjust to your board's free UART and pins):
 
@@ -165,7 +166,7 @@ On each `connect()` the library does:
 | 1 | TX pin configured as output, level HIGH | 1000 ms |
 | 2 | TX LOW | 25 ms |
 | 3 | TX HIGH | 25 ms |
-| 4 | UART reinitialized at 10400 and handshake sent | — |
+| 4 | UART reinitialized/recreated at 10400 and handshake sent | — |
 
 Do not replace this with a direct UART write. The waveform is required to wake the ECU.
 
@@ -233,7 +234,7 @@ KWP2000(uart, brand, tx_pin=None, rx_pin=None, *,
 | `brand` | `KWP2000.SUZUKI`, `KAWASAKI`, `YAMAHA`, `HONDA`, or a case-insensitive string (`"suzuki"`). |
 | `tx_pin` | UART TX pin and fast-init GPIO. Int or `machine.Pin`. Required by `connect()`. |
 | `rx_pin` | UART RX pin used when reinitializing. Int or `machine.Pin`. Recommended. |
-| `uart_id` | UART peripheral id. Required when `uart=None`; used as a fallback if `UART.init()` fails. |
+| `uart_id` | UART peripheral id. Required when `uart=None`. When supplied, the UART is deinitialized before the fast-init waveform and recreated afterward. |
 | `uart_kwargs` | Extra `uart.init()` kwargs, e.g. `{"timeout": 10, "rxbuf": 256}`. `baudrate` is forced to 10400. If `"pins"` is present, `tx`/`rx` are not added. |
 | `debug` | Stream with `write()`. Defaults to `sys.stdout` when debug is enabled. |
 | `debug_level` | `DEBUG_NONE` (default), `DEBUG_DEFAULT`, or `DEBUG_VERBOSE`. Debug is silent unless this is > `DEBUG_NONE`. |
@@ -708,7 +709,7 @@ print("last NRC:", ecu.last_nrc)
 | 24 | `use_imperial()`/`use_metric()` change only returned values. | `sensors` applies the same conversion; stored readings are unchanged. |
 | 25 | `debug=` alone does not enable output. | `debug_level` defaults to `DEBUG_NONE`; call `enable_debug(level=...)` or pass `debug_level > 0`. |
 | 26 | `print_status()` can be silent in the first 5 s. | `_last_status_print` starts at 0; pass `min_interval_ms=0` to force. `print_sensors()` sets `ERR_USER` when all values are `None`. |
-| 27 | UART baudrate is forced to 10400; the UART is reinitialized, never deinitialized. | If `uart_kwargs` contains `"pins"`, `tx`/`rx` are not added; use `uart_id` as a fallback. |
+| 27 | UART baudrate is forced to 10400. With `uart_id`, the UART is deinitialized before the waveform and recreated after it; otherwise it is reinitialized. | If `uart_kwargs` contains `"pins"`, `tx`/`rx` are not added; use `uart_id` as a fallback. |
 | 28 | Yamaha/Honda: sensor decoding is not implemented. | `request_sensors()` returns `False` + `ERR_UNSUPPORTED`; use `handle_request()` and label raw output. |
 | 29 | Dealer mode is Suzuki-only; `dealer_mode` is `None` until enabled. | Enable first; check `dealer_mode is not None`. |
 | 30 | Do not use private fields or internal constants (`_connected`, `_sensors`, `_last_sensors`, `_response_header_len`, `ISO_MAX_DATA`) as public API. | Use the documented properties/methods. |
@@ -771,14 +772,14 @@ Run from the repository root:
 python -m unittest discover -s micropython/tests -p "test_*.py" -v
 ```
 
-97 tests pass on plain CPython with a fake UART, fake ECU, fake clock, and fake pin. No hardware
+98 tests pass on plain CPython with a fake UART, fake ECU, fake clock, and fake pin. No hardware
 or third-party packages are required.
 
 ### 9.2 What the host tests do not cover
 
 - Real wiring, voltage levels, or the 12 V interface.
 - Real `machine.Pin` creation from an integer.
-- The `uart_id`-only creation path and UART-init-failure recreation.
+- Real `machine.UART` creation/reinitialization and the `uart_id`-only creation path.
 - `mip` installation.
 - Real 10400-baud timing and watchdog behavior.
 - Yamaha/Honda protocol behavior.
@@ -888,7 +889,7 @@ ecu.dealer_mode
 | [`kwp2000.py`](kwp2000.py) | The entire library; source of truth. |
 | [`README.md`](README.md) | Human-facing install, wiring, API and troubleshooting. |
 | [`examples/basic_working.py`](examples/basic_working.py) | REPL example mirroring the Arduino sketch. |
-| [`tests/test_kwp2000.py`](tests/test_kwp2000.py) | 97 host tests. |
+| [`tests/test_kwp2000.py`](tests/test_kwp2000.py) | 98 host tests. |
 | [`tests/fakes.py`](tests/fakes.py) | Fake UART/ECU/clock/pin. |
 | [`../package.json`](../package.json) | `mip` manifest. |
 | [`../LICENSE`](../LICENSE) | GPL-3.0 repository license. |

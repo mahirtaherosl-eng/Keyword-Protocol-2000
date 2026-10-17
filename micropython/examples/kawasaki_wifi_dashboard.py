@@ -6,14 +6,16 @@ second from a cached snapshot; the ECU is polled about every two seconds.
 
 Wiring
 ------
-ESP32-C6 defaults: UART1 TX=GPIO10 -> L9637 TXD, RX=GPIO11 <- L9637 RXD,
-with a common ground to the bike. Never connect an ESP32 pin directly to the
+ESP32-C6 defaults: UART1 TX=GPIO19 -> L9637 TX input (pin 4),
+RX=GPIO20 <- L9637 RX output (pin 1). L9637 VCC (pin 3) is powered from
+GPIO22 (high while the program runs, low on exit); VS (pin 7) goes to 12 V.
+Use a common ground with the bike. Never connect an ESP32 pin directly to the
 12 V K-line. Board profiles (also in the configuration block):
-  ESP32-C6 (default)   UART1  TX=GPIO10  RX=GPIO11
+  ESP32-C6 (default)   UART1  TX=GPIO19  RX=GPIO20  (VCC=GPIO22)
   ESP32 classic/WROOM  UART2  TX=GPIO17  RX=GPIO16
   ESP32-WROVER/PICO    UART2  TX=GPIO25  RX=GPIO26  (16/17 are PSRAM)
-On the C6, UART0/GPIO16-17 is reserved for the REPL in the generic firmware
-and there is no normal UART2; do not use those pins.
+On the C6, UART0/GPIO16-17 is reserved for the REPL in the generic firmware;
+GPIO10/11 are unusable on this board (a loopback read 0x00).
 
 Phone
 -----
@@ -37,7 +39,8 @@ speed by 1.609344.
 Run
 ---
 Copy kwp2000.py to :lib/ and this file to the board, then run it or save it
-as :main.py. Ctrl-C runs the cleanup block (disconnect + AP off).
+as :main.py. Ctrl-C runs the cleanup block (disconnect + AP off + L9637 VCC
+off).
 """
 
 import time
@@ -45,7 +48,7 @@ import time
 import network
 import socket
 
-from machine import UART
+from machine import Pin, UART
 
 from kwp2000 import KWP2000
 
@@ -66,17 +69,24 @@ PASSWORD = "kwp2000dash"      # WPA2 requires at least 8 characters
 HTTP_PORT = 80
 
 # Board profiles:
-#   ESP32-C6 (default):   UART1, TX=GPIO10, RX=GPIO11
+#   ESP32-C6 (default):   UART1, TX=GPIO19, RX=GPIO20; L9637 VCC=GPIO22
 #   ESP32 classic/WROOM:  UART2, TX=GPIO17, RX=GPIO16
 #   ESP32-WROVER/PICO:    UART2, TX=GPIO25, RX=GPIO26 (GPIO16/17 are PSRAM)
-# On the C6, UART0 (GPIO16/17) is the REPL in the generic firmware and there
-# is no normal UART2, so the classic UART2/17/16 profile raises ESP_FAIL.
-# C6 alternatives if GPIO10/11 are not exposed on your board: GPIO18/19 or
-# GPIO22/23. Avoid 4/5/8/9/15 (strapping), 12/13 (USB), 16/17 (UART0 REPL),
-# and 24-30 (SPI flash).
+# On the C6, UART0 (GPIO16/17) is the REPL in the generic firmware; GPIO10/11
+# are unusable on this board (a loopback read 0x00). If GPIO19/20 are not
+# exposed, use a pair that passes the plain loopback (for example 1/2 or
+# 18/19). Avoid 4/5/8/9/15 (strapping), 12/13 (USB), 16/17 (UART0 REPL), and
+# 24-30 (SPI flash).
 UART_ID = 1
-TX_PIN = 10                   # UART TX and fast-init GPIO
-RX_PIN = 11                   # UART RX
+TX_PIN = 19                   # UART TX and fast-init GPIO
+RX_PIN = 20                   # UART RX
+
+# L9637 logic VCC is switched from this pin: high while the program runs,
+# low on exit. GPIO22 sources the module's VCC; if the module draws more than
+# a safe GPIO current (or has a regulator/LED), drive a MOSFET/load switch
+# from this pin instead of powering the module directly.
+L9637_VCC_PIN = 22
+L9637_VCC_SETTLE_MS = 100     # let the module power up before UART/ECU use
 
 POLL_INTERVAL_MS = 2000       # ECU sensor poll period
 PAGE_REFRESH_MS = 1000        # browser fetch period
@@ -416,17 +426,19 @@ def create_uart():
         log("UART%d init failed on TX=%s RX=%s: %s" %
             (UART_ID, TX_PIN, RX_PIN, exc))
         log("The pins or UART id are reserved on this board.")
-        log("ESP32-C6: use UART_ID=1, TX_PIN=10, RX_PIN=11.")
-        log("  UART0/GPIO16-17 is the REPL; there is no normal UART2.")
+        log("ESP32-C6: use UART_ID=1, TX_PIN=19, RX_PIN=20.")
+        log("  UART0/GPIO16-17 is the REPL; GPIO10/11 do not work here.")
+        log("  L9637 VCC is switched from GPIO22; check the module wiring.")
         log("ESP32 classic/WROOM: UART_ID=2, TX_PIN=17, RX_PIN=16.")
         log("ESP32-WROVER/PICO: avoid GPIO16/17 (PSRAM); try 25/26.")
         log("Rewire the interface to the configured pins, then retry.")
         raise
 
 
-def main():
+def _run_dashboard():
     uart = create_uart()
-    ecu = KWP2000(uart, BRAND, tx_pin=TX_PIN, rx_pin=RX_PIN)
+    ecu = KWP2000(uart, BRAND, tx_pin=TX_PIN, rx_pin=RX_PIN,
+                  uart_id=UART_ID)
     if DEBUG_LEVEL:
         ecu.enable_debug(stream=BrowserLogStream(), level=DEBUG_LEVEL)
 
@@ -469,10 +481,10 @@ def main():
                                 _hex(ecu.last_response_payload))
                             last_connect_errors = ecu.errors
                         if not kline_hint_shown:
-                            log("K-line tip: module TX->GPIO10, "
-                                "module RX<-GPIO11, common ground;")
-                            log("  check the bike's K-line pin and set "
-                                "DEBUG_LEVEL=DEBUG_VERBOSE.")
+                            log("K-line tip: L9637 VCC on GPIO22, VS=12V; "
+                                "TX->GPIO19, RX<-GPIO20, GND;")
+                            log("  check module RX idle (~3.3V) and the bike "
+                                "K-line pin; set DEBUG_LEVEL=DEBUG_VERBOSE.")
                             kline_hint_shown = True
                         STATE["errors"] = list(ecu.errors)
                         next_connect = time.ticks_add(
@@ -525,6 +537,17 @@ def main():
         except OSError:
             pass
         log("Stopped")
+
+
+def main():
+    """Power the L9637 only while the dashboard runs."""
+    vcc = Pin(L9637_VCC_PIN, Pin.OUT, value=0)
+    vcc.value(1)
+    try:
+        time.sleep_ms(L9637_VCC_SETTLE_MS)
+        _run_dashboard()
+    finally:
+        vcc.value(0)
 
 
 if __name__ == "__main__":

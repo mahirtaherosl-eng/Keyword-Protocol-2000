@@ -219,23 +219,26 @@ IP printed at boot (normally `http://192.168.4.1/`); `localhost` on the phone
 refers to the phone itself. The AP has no internet access; if the phone warns
 about this, choose to stay connected.
 
-The example defaults to the **ESP32-C6**: UART1, TX=GPIO10, RX=GPIO11. Wire
-GPIO10 to the interface TXD, GPIO11 to the interface RXD, and share a ground.
-On the generic C6 firmware UART0 (GPIO16/17) is reserved for the REPL and
-there is no normal UART2, so the classic UART2/17/16 profile fails with
-`ESP_FAIL`. For other boards, edit the config block:
+The example defaults to the **ESP32-C6**: UART1, TX=GPIO19, RX=GPIO20, with
+the L9637 logic VCC switched from GPIO22. Wire GPIO19 to the L9637 TX input
+(pin 4), GPIO20 to its RX output (pin 1), GPIO22 to its VCC (pin 3), VS
+(pin 7) to switched 12 V, and share a ground. GPIO22 is driven high while the
+program runs and low on exit. UART0 (GPIO16/17) is reserved for the REPL on
+the generic C6 firmware; GPIO10/11 are not usable on this board (a loopback
+returned 0x00). For other boards, edit the config block:
 
 | Board | `UART_ID` | `TX_PIN` | `RX_PIN` |
 | --- | --- | --- | --- |
-| ESP32-C6 (default) | 1 | 10 | 11 |
+| ESP32-C6 (default) | 1 | 19 | 20 |
 | ESP32 classic / WROOM | 2 | 17 | 16 |
 | ESP32-WROVER / PICO | 2 | 25 | 26 |
 
-On the C6, GPIO18/19 or GPIO22/23 are alternatives if GPIO10/11 are not
-exposed. Edit `SSID` and `PASSWORD` at the top as well. The page also has a
-scrolling **Console** panel that mirrors the script's serial output; set
-`DEBUG_LEVEL` to `KWP2000.DEBUG_DEFAULT` or `DEBUG_VERBOSE` to include
-KWP2000 debug messages.
+If GPIO19/20 are unavailable on your C6 board, use a pair that passes the
+plain loopback (for example 1/2 or 18/19); keep GPIO22 for the switched VCC.
+Edit `SSID` and `PASSWORD` at the top as well. The page also has a scrolling
+**Console** panel that mirrors the script's serial output; set `DEBUG_LEVEL`
+to `KWP2000.DEBUG_DEFAULT` or `DEBUG_VERBOSE` to include KWP2000 debug
+messages.
 
 #### K-line troubleshooting
 
@@ -252,21 +255,58 @@ If `connect()` fails, the Console shows a line such as
 Set `DEBUG_LEVEL = KWP2000.DEBUG_VERBOSE` to log every byte. With the ignition
 on, the first attempt should show `Sending: 81 11 F1 81 04` followed by five
 `Echo:` lines. Matching echoes mean the local RX path works; random or
-inverted echoes mean the module/ESP32 RX wiring is wrong.
+inverted echoes mean the module/ESP32 RX wiring is wrong. One `Echo: 00` or
+no echoes at all means the local TX/RX/logic path is not working; five
+matching echoes mean the module path works and the ECU/bike is the next
+suspect.
+
+Two loopback checks isolate the ESP32 side. Disconnect the module from
+GPIO19/GPIO20 and jumper the two pins together:
+
+```python
+import time
+from machine import UART
+u = UART(1, baudrate=10400, tx=19, rx=20)
+u.write(b"\x55")
+time.sleep_ms(20)
+print(u.read())      # expect b'U'
+```
+
+If this fails, the UART/pins are the problem; use a pair that passes the
+loopback (for example 1/2 or 18/19) and update `TX_PIN`/`RX_PIN`. GPIO22 is
+reserved for the switched L9637 VCC. If it passes, run the dashboard with the
+jumper still in place: the verbose log should show five matching `Echo:`
+lines after `Sending: 81 11 F1 81 04`, proving the fast-init/recreate path.
+Remove the jumper and reconnect the module afterward.
 
 L9637/MC33660 wiring (datasheet pin functions, not module header labels):
 
 | L9637 pin | Function | Connect to |
 | --- | --- | --- |
-| 4 | TX input | ESP32 GPIO10 |
-| 1 | RX output | ESP32 GPIO11 |
+| 4 | TX input | ESP32 GPIO19 |
+| 1 | RX output | ESP32 GPIO20 |
 | 5 | GND | common ground |
-| 3 | VCC (3.0-7.0 V) | 3.3 V |
+| 3 | VCC (3.0-7.0 V) | ESP32 GPIO22 (switched) |
+| 7 | VS (4.5-36 V) | switched 12 V |
 | 6 | K-line | bike K-line |
+
+The L9637 needs **both** supplies: logic VCC on pin 3 and battery VS on pin 7.
+Here VCC is switched from ESP32 GPIO22 (high while the program runs, low on
+exit) and VS is switched 12 V. Powering only one of them leaves the K-line
+driver or the logic interface dead. GPIO22 directly sources the module's VCC;
+the L9637 itself draws little, but if the module adds a regulator, LED, or
+other load, drive a MOSFET/load switch from GPIO22 instead. With VCC = 3.3 V
+the logic levels are directly ESP32-compatible. If the module runs VCC at
+5 V, its TX high threshold is about 3.5 V (marginal for a 3.3 V ESP32) and
+its RX output is 5 V; use a level shifter or a 3.3 V module.
 
 Module headers often label "TX"/"RX" from either the MCU or the module side;
 verify the direction against the module schematic. The K-line needs a
 510 ohm-5 kohm pull-up to 12 V (usually in the bike or module).
+
+With the module powered and the K-line idle, measure the module RX output: it
+should idle at the module's logic VCC (~3.3 V). A 0 V/floating RX output or a
+5 V logic supply points at the module/wiring rather than the bike.
 
 Bike-side checks:
 
@@ -277,7 +317,7 @@ Bike-side checks:
 - Do not connect K to battery +12 V.
 - Confirm the ESP32, module, and bike grounds are common.
 
-With a scope or logic analyzer during connect, GPIO10 should show ~1 s high,
+With a scope or logic analyzer during connect, GPIO19 should show ~1 s high,
 ~25 ms low, ~25 ms high, then the request bytes. The module K pin and the bike
 K-line should show the same wake-up pulse and request bytes. If the K-line
 never shows them, the problem is before the bus (module TX pin/wiring); if it

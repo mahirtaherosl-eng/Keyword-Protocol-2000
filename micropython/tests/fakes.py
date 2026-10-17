@@ -62,6 +62,7 @@ class FakeUART:
         self.tx = bytearray()
         self.init_calls = []
         self.on_write = None
+        self.deinited = False
 
     def init(self, **kwargs):
         self.init_calls.append(kwargs)
@@ -91,6 +92,9 @@ class FakeUART:
 
     def flush(self):
         pass
+
+    def deinit(self):
+        self.deinited = True
 
 
 class FakeECU:

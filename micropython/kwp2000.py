@@ -539,6 +539,7 @@ class KWP2000:
         if self._tx_pin_arg is None:
             raise RuntimeError("tx_pin is required for the fast-init waveform")
 
+        self._release_uart()
         tx_pin = self._get_tx_pin()
         _pin_init_output(tx_pin, 1)
 
@@ -1032,22 +1033,34 @@ class KWP2000:
                 kwargs["rx"] = self._rx_pin_arg
         return kwargs
 
-    def _reinit_uart(self):
-        self._ensure_uart()
-        kwargs = self._uart_init_kwargs()
+    def _release_uart(self):
+        if self._uart_id is None or self._uart is None:
+            return
         try:
-            self._uart.init(**kwargs)
-        except (AttributeError, TypeError, OSError, ValueError):
-            if self._uart_id is None:
-                raise RuntimeError(
-                    "UART.init() failed to reattach the K-line pins; "
-                    "pass uart_kwargs or create a new UART object"
-                )
+            self._uart.deinit()
+        except (AttributeError, OSError):
+            pass
+
+    def _reinit_uart(self):
+        kwargs = self._uart_init_kwargs()
+        if self._uart_id is not None:
+            # Mirror the C++ Serial.end()/begin(): create a fresh UART after
+            # the TX pin was driven as a GPIO for the fast-init waveform.
             try:
                 from machine import UART
                 self._uart = UART(self._uart_id, **kwargs)
+                return
             except Exception as exc:
                 raise RuntimeError("could not re-initialize UART: %s" % exc)
+
+        self._ensure_uart()
+        try:
+            self._uart.init(**kwargs)
+        except (AttributeError, TypeError, OSError, ValueError):
+            raise RuntimeError(
+                "UART.init() failed to reattach the K-line pins; "
+                "pass uart_id or create a new UART object"
+            )
 
     def _get_tx_pin(self):
         if self._tx_pin_obj is None:

@@ -7,6 +7,7 @@ Run from the repository root:
 
 import os
 import sys
+import types
 import unittest
 from io import StringIO
 from unittest import mock
@@ -843,6 +844,38 @@ class TestConstruction(unittest.TestCase):
     def test_uart_or_id_required(self):
         with self.assertRaises(ValueError):
             kwp2000.KWP2000(None, "suzuki")
+
+
+class TestUartIdReinit(KWPTestCase):
+    def test_uart_id_release_and_recreate_after_waveform(self):
+        calls = []
+        replacement = FakeUART(self.clock)
+        replacement.on_write = self.ecu.on_write
+        self.ecu.uart = replacement
+
+        class FakeMachineUART:
+            def __new__(cls, *args, **kwargs):
+                calls.append((args, kwargs))
+                return replacement
+
+        fake_machine = types.ModuleType("machine")
+        fake_machine.UART = FakeMachineUART
+
+        with mock.patch.dict(sys.modules, {"machine": fake_machine}):
+            device = kwp2000.KWP2000(
+                self.uart, "suzuki", tx_pin=self.pin, rx_pin=16,
+                uart_id=2,
+            )
+            self.ecu.sensor_payloads[b"\x21\x08"] = suzuki_sensor_payload()
+            self.assertTrue(device.connect())
+
+        self.assertTrue(self.uart.deinited)
+        self.assertTrue(calls)
+        args, kwargs = calls[-1]
+        self.assertEqual(args, (2,))
+        self.assertEqual(kwargs["baudrate"], 10400)
+        self.assertIs(kwargs["tx"], self.pin)
+        self.assertEqual(kwargs["rx"], 16)
 
 
 if __name__ == "__main__":
