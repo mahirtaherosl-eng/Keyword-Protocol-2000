@@ -97,7 +97,7 @@ else:
 
 ### 2.3 Board examples `[P]`
 
-**ESP32** (used by the bundled example):
+**ESP32 classic / WROOM** (used by `examples/basic_working.py`):
 
 ```python
 from machine import UART
@@ -110,6 +110,25 @@ RX_PIN = 16
 uart = UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
 ecu = KWP2000(uart, "suzuki", tx_pin=TX_PIN, rx_pin=RX_PIN)
 ```
+
+**ESP32-C6** (used by `examples/kawasaki_wifi_dashboard.py`; different UART map):
+
+```python
+from machine import UART
+from kwp2000 import KWP2000
+
+UART_ID = 1
+TX_PIN = 10
+RX_PIN = 11
+
+uart = UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
+ecu = KWP2000(uart, "kawasaki", tx_pin=TX_PIN, rx_pin=RX_PIN)
+```
+
+On the generic C6 firmware UART0 (GPIO16/17) is reserved for the REPL and there is no
+normal UART2, so `UART(2, tx=17, rx=16)` raises `OSError: [Errno 1] EPERM: ESP_FAIL`.
+GPIO10/11 are free on the C6 DevKitC-1; GPIO18/19 or GPIO22/23 are alternatives. Avoid
+GPIO4/5/8/9/15 (strapping), 12/13 (USB), 16/17 (UART0), and 24-30 (SPI flash).
 
 **Raspberry Pi Pico / RP2040** (adjust to your board's free UART and pins):
 

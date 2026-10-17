@@ -6,9 +6,14 @@ second from a cached snapshot; the ECU is polled about every two seconds.
 
 Wiring
 ------
-ESP32 UART2 TX=GPIO17 / RX=GPIO16 -> L9637 / MC33660 / MC33199 (or
-equivalent) interface, with a common ground to the bike. Never connect an
-ESP32 pin directly to the 12 V K-line.
+ESP32-C6 defaults: UART1 TX=GPIO10 -> L9637 TXD, RX=GPIO11 <- L9637 RXD,
+with a common ground to the bike. Never connect an ESP32 pin directly to the
+12 V K-line. Board profiles (also in the configuration block):
+  ESP32-C6 (default)   UART1  TX=GPIO10  RX=GPIO11
+  ESP32 classic/WROOM  UART2  TX=GPIO17  RX=GPIO16
+  ESP32-WROVER/PICO    UART2  TX=GPIO25  RX=GPIO26  (16/17 are PSRAM)
+On the C6, UART0/GPIO16-17 is reserved for the REPL in the generic firmware
+and there is no normal UART2; do not use those pins.
 
 Phone
 -----
@@ -57,9 +62,19 @@ SSID = "Kawasaki-KWP2000"
 PASSWORD = "kwp2000dash"      # WPA2 requires at least 8 characters
 
 HTTP_PORT = 80
-UART_ID = 2
-TX_PIN = 17                   # UART TX and fast-init GPIO
-RX_PIN = 16                   # UART RX
+
+# Board profiles:
+#   ESP32-C6 (default):   UART1, TX=GPIO10, RX=GPIO11
+#   ESP32 classic/WROOM:  UART2, TX=GPIO17, RX=GPIO16
+#   ESP32-WROVER/PICO:    UART2, TX=GPIO25, RX=GPIO26 (GPIO16/17 are PSRAM)
+# On the C6, UART0 (GPIO16/17) is the REPL in the generic firmware and there
+# is no normal UART2, so the classic UART2/17/16 profile raises ESP_FAIL.
+# C6 alternatives if GPIO10/11 are not exposed on your board: GPIO18/19 or
+# GPIO22/23. Avoid 4/5/8/9/15 (strapping), 12/13 (USB), 16/17 (UART0 REPL),
+# and 24-30 (SPI flash).
+UART_ID = 1
+TX_PIN = 10                   # UART TX and fast-init GPIO
+RX_PIN = 11                   # UART RX
 
 POLL_INTERVAL_MS = 2000       # ECU sensor poll period
 PAGE_REFRESH_MS = 1000        # browser fetch period
@@ -323,11 +338,27 @@ def poll_sensors(ecu):
 
 
 # ---------------------------------------------------------------------------
-# Main loop
+# UART setup and main loop
 # ---------------------------------------------------------------------------
 
+def create_uart():
+    """Create the K-line UART, with board-aware guidance on failure."""
+    try:
+        return UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
+    except OSError as exc:
+        print("UART%d init failed on TX=%s RX=%s: %s" %
+              (UART_ID, TX_PIN, RX_PIN, exc))
+        print("The pins or UART id are reserved on this board.")
+        print("ESP32-C6: use UART_ID=1, TX_PIN=10, RX_PIN=11.")
+        print("  UART0/GPIO16-17 is the REPL; there is no normal UART2.")
+        print("ESP32 classic/WROOM: UART_ID=2, TX_PIN=17, RX_PIN=16.")
+        print("ESP32-WROVER/PICO: avoid GPIO16/17 (PSRAM); try 25/26.")
+        print("Rewire the interface to the configured pins, then retry.")
+        raise
+
+
 def main():
-    uart = UART(UART_ID, baudrate=10400, tx=TX_PIN, rx=RX_PIN)
+    uart = create_uart()
     ecu = KWP2000(uart, BRAND, tx_pin=TX_PIN, rx_pin=RX_PIN)
     if DEBUG_LEVEL:
         ecu.enable_debug(level=DEBUG_LEVEL)

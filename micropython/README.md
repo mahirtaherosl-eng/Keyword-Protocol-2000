@@ -216,9 +216,23 @@ it from the REPL and use:
 starts a WiFi access point and serves a phone-friendly dashboard with Gear
 (GPS raw), RPM, Speed (raw byte), and TPS (raw byte). Join the AP and open the
 IP printed at boot (normally `http://192.168.4.1/`); `localhost` on the phone
-refers to the phone itself. Edit `SSID`, `PASSWORD`, `TX_PIN`, and `RX_PIN` at
-the top of the example. The AP has no internet access; if the phone warns
+refers to the phone itself. The AP has no internet access; if the phone warns
 about this, choose to stay connected.
+
+The example defaults to the **ESP32-C6**: UART1, TX=GPIO10, RX=GPIO11. Wire
+GPIO10 to the interface TXD, GPIO11 to the interface RXD, and share a ground.
+On the generic C6 firmware UART0 (GPIO16/17) is reserved for the REPL and
+there is no normal UART2, so the classic UART2/17/16 profile fails with
+`ESP_FAIL`. For other boards, edit the config block:
+
+| Board | `UART_ID` | `TX_PIN` | `RX_PIN` |
+| --- | --- | --- | --- |
+| ESP32-C6 (default) | 1 | 10 | 11 |
+| ESP32 classic / WROOM | 2 | 17 | 16 |
+| ESP32-WROVER / PICO | 2 | 25 | 26 |
+
+On the C6, GPIO18/19 or GPIO22/23 are alternatives if GPIO10/11 are not
+exposed. Edit `SSID` and `PASSWORD` at the top as well.
 
 ## Differences from the Arduino library
 
