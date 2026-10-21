@@ -597,6 +597,29 @@ class TestKawasakiSensors(KWPTestCase):
         self.assertIsNone(self.device.stps)
         self.assertIsNone(self.device.voltage)
 
+    def test_two_byte_speed_formula(self):
+        self.ecu.sensor_payloads[b"\x21\x0C"] = b"\x61\x0C\x01\x2C"
+        self.assertTrue(self.device.request_sensors())
+        self.assertAlmostEqual(self.device.speed, (1 * 100 + 0x2C) / 2)
+
+    def test_two_byte_tps_formula(self):
+        self.ecu.sensor_payloads[b"\x21\x04"] = b"\x61\x04\x00\xDE"
+        self.assertTrue(self.device.request_sensors())
+        self.assertAlmostEqual(self.device.tps, 125 * (222 - 201) / (405 - 201))
+
+    def test_two_byte_tps_range_endpoints(self):
+        self.ecu.sensor_payloads[b"\x21\x04"] = b"\x61\x04\x00\xC9"
+        self.assertTrue(self.device.request_sensors())
+        self.assertAlmostEqual(self.device.tps, 0.0)
+        self.ecu.sensor_payloads[b"\x21\x04"] = b"\x61\x04\x01\x95"
+        self.assertTrue(self.device.request_sensors())
+        self.assertAlmostEqual(self.device.tps, 125.0)
+
+    def test_two_byte_gps_stays_one_byte(self):
+        self.ecu.sensor_payloads[b"\x21\x0B"] = b"\x61\x0B\x04\xFF"
+        self.assertTrue(self.device.request_sensors())
+        self.assertEqual(self.device.gps, 4)
+
     def test_partial_failure_keeps_previous_values(self):
         self.assertTrue(self.device.request_sensors())
         old_rpm = self.device.rpm

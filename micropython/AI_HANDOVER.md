@@ -1,7 +1,7 @@
 # AI Handover Notes: KWP2000 MicroPython Library
 
 **Module version:** `0.1.0`
-**Last verified:** 2026-10-17
+**Last verified:** 2026-10-20
 **Audience:** an AI coding agent writing MicroPython programs for a microcontroller.
 **Source of truth:** [`kwp2000.py`](kwp2000.py). If this document disagrees with the code, the code wins.
 
@@ -332,13 +332,18 @@ All sensor properties start as `None`. Values persist across failed refreshes, `
 | `gps` | raw byte (gear) | raw byte |
 | `clutch` | raw byte | always `None` |
 | `rpm` | `rpm_h * 10 + rpm_l / 10` (float) | `((b2 * 255 + b3) / 255.0) * 100` (float) |
-| `speed` | `raw * 2` km/h | raw byte (not km/h) |
-| `tps` | `125 * (raw - 55) / 201` (can be negative) | raw byte (not percent) |
+| `speed` | `raw * 2` km/h | one byte: raw (not km/h); two bytes: `(b2 * 100 + b3) / 2` km/h |
+| `tps` | `125 * (raw - 55) / 201` (can be negative) | one byte: raw (not percent); two bytes: `125 * (u16 - 201) / (405 - 201)` with `u16 = b2 * 256 + b3` |
 | `stps` | `raw / 2.55` | always `None` |
 | `iap` | `raw * 4 * 0.136` | same formula |
 | `iat` | `(raw - 48) / 1.6` °C | same formula |
 | `ect` | `(raw - 48) / 1.6` °C | same formula |
 | `voltage` | `raw * 100 / 126` V | always `None` |
+
+Kawasaki speed and TPS use the two-byte formulas when the ECU reply carries more than one data
+byte (`len(payload) >= 4`); a one-byte reply keeps the raw value. The two-byte TPS value is
+big-endian and the documented range is 201..405 (for example `00 DE` = 222). Two-byte speed is a
+decimal pair: the first byte is hundreds, the second is the remainder.
 
 Unit conversion is read-only:
 
@@ -705,7 +710,7 @@ print("last NRC:", ecu.last_nrc)
 | 20 | `connect()` while already connected returns `True` without resetting errors. | Call `reset_error()` explicitly if a clean slate is required. |
 | 21 | Disconnected DTC calls return `[]`/`False` + `ERR_USER` before validating arguments. | Do not rely on `ValueError` while disconnected. |
 | 22 | `disconnect()` preserves sensor values and error flags. | Response frames are cleared, but old readings/flags remain. |
-| 23 | Kawasaki `tps`/`speed` are raw bytes; Suzuki `rpm` is a float. | Use the brand-specific table in §4.5; never reuse Suzuki formulas for Kawasaki. |
+| 23 | Kawasaki `tps`/`speed` are raw bytes for one-byte replies; two-byte replies use the §4.5 formulas. Suzuki `rpm` is a float. | Use the brand-specific table in §4.5; never reuse Suzuki formulas for Kawasaki. |
 | 24 | `use_imperial()`/`use_metric()` change only returned values. | `sensors` applies the same conversion; stored readings are unchanged. |
 | 25 | `debug=` alone does not enable output. | `debug_level` defaults to `DEBUG_NONE`; call `enable_debug(level=...)` or pass `debug_level > 0`. |
 | 26 | `print_status()` can be silent in the first 5 s. | `_last_status_print` starts at 0; pass `min_interval_ms=0` to force. `print_sensors()` sets `ERR_USER` when all values are `None`. |
@@ -737,7 +742,7 @@ print("last NRC:", ecu.last_nrc)
 - [ ] `keep_alive()` is called in every connected loop.
 - [ ] `request_sensors()`/DTC/raw return values are checked.
 - [ ] Every sensor value is guarded against `None` before formatting/arithmetic.
-- [ ] Brand-specific sensor semantics are used (Kawasaki TPS/speed raw; Suzuki RPM float).
+- [ ] Brand-specific sensor semantics are used (Kawasaki TPS/speed raw or 2-byte reply; Suzuki RPM float).
 - [ ] Empty DTC list is classified with `last_response_code`/new error bits.
 - [ ] Clear-all uses `clear_trouble_codes()`; single-byte clear uses an int; `0` is not clear-all.
 - [ ] Raw payloads contain only service/data bytes; header/checksum are left to the library.

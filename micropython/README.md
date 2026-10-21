@@ -164,6 +164,12 @@ after a failed refresh.
 properties; they never modify the stored readings, so repeated reads are
 stable and switching back restores the metric values.
 
+Kawasaki `speed` and `tps` decode a second data byte when the ECU sends one.
+A one-byte reply keeps the raw value; a two-byte reply uses
+`(b2 * 100 + b3) / 2` km/h for speed and
+`125 * (u16 - 201) / (405 - 201)` for TPS, where `u16` is the big-endian
+`(b2 << 8) | b3` value (`00 DE` = 222).
+
 ### Status, errors and debug
 
 | Member | Description |
@@ -214,7 +220,8 @@ it from the REPL and use:
 
 [`examples/kawasaki_wifi_dashboard.py`](examples/kawasaki_wifi_dashboard.py)
 starts a WiFi access point and serves a phone-friendly dashboard with Gear
-(GPS raw), RPM, Speed (raw byte), and TPS (raw byte). Join the AP and open the
+(GPS raw), RPM, Speed, and TPS. One-byte Kawasaki speed/TPS replies are raw
+values; replies with a second data byte are decoded. Join the AP and open the
 IP printed at boot (normally `http://192.168.4.1/`); `localhost` on the phone
 refers to the phone itself. The AP has no internet access; if the phone warns
 about this, choose to stay connected.
@@ -325,6 +332,18 @@ does and the ECU stays silent, check the bike pin, ECU state, and fast-init
 timing. Power-cycle the bike and retry once. If possible, run the C++
 `basic_working` sketch with the same interface and bike to separate a
 port/timing issue from a hardware issue.
+
+### Bluetooth Android logger (ESP32-C6)
+
+[`examples/bluetooth android logger/`](examples/bluetooth%20android%20logger/README.md)
+streams all sensor values over BLE as newline-delimited JSON. The folder
+includes an Android Studio app (Kotlin) that scans and connects, shows a live
+dashboard, logs CSV, shares the file, and changes the ESP32 poll interval from
+the phone. The ESP32 advertises as `KWP2000-C6`; C6 wiring matches the WiFi
+dashboard (UART1, TX=GPIO19, RX=GPIO20, L9637 VCC=GPIO22). Set
+`SIMULATE = True` to test the BLE/app path without an ECU. The folder README
+documents the UUIDs, JSON schema, control command, build steps and
+troubleshooting.
 
 ## Differences from the Arduino library
 

@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.KwpBleLogger" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>

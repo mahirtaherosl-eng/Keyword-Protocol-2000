@@ -1232,7 +1232,19 @@ class KWP2000:
                 self._error_flags |= ERR_HEADER
                 return None
             return ((payload[2] * 255 + payload[3]) / 255.0) * 100
-        if name in ("gps", "speed", "tps"):
+        if name == "speed":
+            # Some ECUs append a second data byte: decimal pair (hundreds,
+            # remainder) divided by two. One-byte replies keep the raw value.
+            if len(payload) >= 4:
+                return (payload[2] * 100 + payload[3]) / 2
+            return raw
+        if name == "tps":
+            # Two-byte replies carry a big-endian raw value in 201..405.
+            if len(payload) >= 4:
+                value = (payload[2] << 8) | payload[3]
+                return 125 * (value - 201) / (405 - 201)
+            return raw
+        if name == "gps":
             return raw
         if name == "iap":
             return raw * 4 * 0.136

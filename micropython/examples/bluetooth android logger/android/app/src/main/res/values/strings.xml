@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">KWP2000 BLE Logger</string>
+
+    <string name="scan">Scan</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="start_logging">Start logging</string>
+    <string name="stop_logging">Stop logging</string>
+    <string name="share_csv">Share CSV</string>
+    <string name="interval_label">Update interval</string>
+    <string name="devices_label">Nearby devices</string>
+    <string name="value_none">—</string>
+    <string name="last_sample_initial">Last sample: —</string>
+    <string name="last_sample_format">Last sample: seq %1$d, %2$d ms uptime</string>
+
+    <string name="gps_label">GPS</string>
+    <string name="clutch_label">Clutch</string>
+    <string name="rpm_label">RPM</string>
+    <string name="speed_label">Speed</string>
+    <string name="tps_label">TPS</string>
+    <string name="stps_label">STPS</string>
+    <string name="iap_label">IAP</string>
+    <string name="iat_label">IAT</string>
+    <string name="ect_label">ECT</string>
+    <string name="voltage_label">Voltage</string>
+
+    <string name="status_idle">Disconnected</string>
+    <string name="status_detail_idle">Scan for the ESP32 and connect.</string>
+    <string name="ack_applied">Interval %1$.1f s applied</string>
+    <string name="ack_failed">Interval update failed: %1$s</string>
+    <string name="log_started">Logging to %1$s</string>
+    <string name="log_saved">Log saved: %1$s (%2$d rows)</string>
+    <string name="log_failed">Could not write the CSV file.</string>
+    <string name="not_connected">Connect to the ESP32 first.</string>
+    <string name="share_chooser">Share CSV</string>
+    <string name="no_log">No CSV log to share yet.</string>
+
+    <string-array name="interval_options">
+        <item>1 s</item>
+        <item>2 s</item>
+        <item>5 s</item>
+        <item>10 s</item>
+    </string-array>
+</resources>
