@@ -159,14 +159,15 @@ during a blocking sensor poll is applied when the poll returns.
 
 ### Build
 
-Requirements: Android Studio (Koala or newer), JDK 17, Android SDK 34, and a
-phone running Android 8.0+ with BLE.
+Requirements: a recent Android Studio (AGP 8.13 support), JDK 17 or newer,
+Android SDK 34, and a phone running Android 8.0+ with BLE. The project pins
+**Gradle 8.13**, **AGP 8.13.2** and **Kotlin 2.2.20**.
 
 1. Open the `android/` folder in Android Studio.
 2. The Gradle wrapper **jar/scripts are intentionally not committed** (binary
    files). Android Studio can import the project from the pinned
-   `gradle/wrapper/gradle-wrapper.properties` (Gradle 8.7). If your setup wants
-   a wrapper, run `gradle wrapper --gradle-version 8.7` once, then use
+   `gradle/wrapper/gradle-wrapper.properties` (Gradle 8.13). If your setup wants
+   a wrapper, run `gradle wrapper --gradle-version 8.13` once, then use
    `./gradlew assembleDebug`.
 3. Build the debug APK or install directly from Studio:
 

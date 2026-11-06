@@ -241,7 +241,7 @@ class BleSensorClient(
             if (characteristic.uuid == BleUuids.SENSOR) handleChunk(value)
         }
 
-        @Suppress("DEPRECATION")
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
@@ -460,8 +460,7 @@ class BleSensorClient(
     }
 
     private fun scheduleReconnect() {
-        if (!autoReconnect) return
-        val device = lastDevice ?: return
+        if (!autoReconnect || lastDevice == null) return
         val delayMs = (RECONNECT_BASE_MS shl minOf(reconnectAttempt, 5))
             .coerceAtMost(RECONNECT_MAX_MS)
         reconnectAttempt++
