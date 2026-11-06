@@ -77,7 +77,7 @@ Edit the block at the top of `esp32_ble_logger.py`:
 | `UART_ID`, `TX_PIN`, `RX_PIN` | `1, 19, 20` | K-line UART |
 | `L9637_VCC_PIN` | `22` | Switched L9637 logic VCC |
 | `POLL_INTERVAL_MS` | `2000` | Default poll period |
-| `MIN/MAX_POLL_INTERVAL_MS` | `1000/10000` | Accepted phone range |
+| `MIN/MAX_POLL_INTERVAL_MS` | `250/10000` | Accepted phone range |
 | `KEEPALIVE_INTERVAL_MS` | `1000` | Must stay below the 2 s link expiry |
 | `SIMULATE` | `False` | Synthetic sensors; no UART/ECU |
 | `DEBUG_LEVEL` | `DEBUG_NONE` | Set `DEBUG_DEFAULT` during bring-up |
@@ -135,8 +135,17 @@ Write one JSON line to the control characteristic:
 {"cmd":"interval","ms":2000}
 ```
 
-The accepted range is 1000-10000 ms; values outside it are clamped. The ESP32
-replies on the sensor characteristic with:
+The accepted range is 250-10000 ms; values outside it are clamped. The
+interval is the **minimum spacing between poll starts**, not a guaranteed
+sample rate:
+
+- Suzuki `request_sensors()` is one request and takes ~200-250 ms, so the
+  0.25 s option gives roughly 4 samples/s.
+- Kawasaki `request_sensors()` sends seven requests and needs ~1.1-1.3 s per
+  sample. Choosing 0.25 s or 0.5 s makes it poll back-to-back at that natural
+  rate; it cannot reach 4 samples/s.
+
+The ESP32 replies on the sensor characteristic with:
 
 ```json
 {"ack":"interval","ms":2000,"ok":true}
@@ -173,8 +182,8 @@ third-party libraries.
 1. Tap **Scan**. On Android 12+ grant **Nearby devices**; on Android 11 and
    below grant location and enable location services.
 2. Tap `KWP2000-C6` in the device list.
-3. The dashboard updates once per poll. Choose **Update interval** (1, 2, 5 or
-   10 s); the app writes the command and shows the ACK.
+3. The dashboard updates once per poll. Choose **Update interval** (0.25, 0.5,
+   1, 2, 5 or 10 s); the app writes the command and shows the ACK.
 4. Tap **Start logging** to begin CSV capture, then **Stop logging**.
 5. Tap **Share CSV** to export the file through any file-capable app.
 
@@ -252,7 +261,7 @@ Hardware smoke test:
 | No device in the scan | Nearby devices permission, Bluetooth on, BLE firmware (`import bluetooth`), correct UUID, range. Android 11 and below also needs location services. |
 | Connects but no values | ESP32 serial console: is `connect()` succeeding? Check ignition, K-line wiring, `BRAND`, L9637 VCC/VS. The app detail line should reach "Connected · MTU ...". |
 | Values are null | Normal for Kawasaki `clutch`, `stps`, `voltage`; also null before the first successful poll. |
-| Interval change has no effect | Wait for the ACK; the ESP32 applies it after any blocking poll. Values are clamped to 1-10 s. |
+| Interval change has no effect | Wait for the ACK; the ESP32 applies it after any blocking poll. Values are clamped to 0.25-10 s. Kawasaki still needs ~1.1-1.3 s per sample. |
 | Updates pause for tens of seconds | A failed Kawasaki `request_sensors()` blocks ~44 s. This is a library/bus limitation, not BLE. |
 | Watchdog resets | Disable it or use >60 s; it cannot be fed inside a library call. |
 | ESP32 resets/hangs | Keep the CPU frequency at the default (>=80 MHz); do not enable WiFi in this example. |

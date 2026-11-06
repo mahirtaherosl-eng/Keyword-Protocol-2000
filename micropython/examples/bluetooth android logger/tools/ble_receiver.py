@@ -168,7 +168,7 @@ def main():
     parser.add_argument("--csv", help="write samples to this CSV file")
     parser.add_argument(
         "--interval", type=int,
-        help="write an update-interval command (1000-10000 ms)",
+        help="write an update-interval command (250-10000 ms)",
     )
     args = parser.parse_args()
 

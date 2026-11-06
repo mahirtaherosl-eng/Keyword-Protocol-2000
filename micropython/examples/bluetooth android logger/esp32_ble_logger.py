@@ -62,10 +62,15 @@ RX_PIN = 20                   # UART RX
 L9637_VCC_PIN = 22
 L9637_VCC_SETTLE_MS = 100
 
-POLL_INTERVAL_MS = 2000       # default sensor poll period
-MIN_POLL_INTERVAL_MS = 1000
+POLL_INTERVAL_MS = 2000       # default minimum spacing between polls
+MIN_POLL_INTERVAL_MS = 250    # Suzuki can poll ~4 Hz; Kawasaki is slower
 MAX_POLL_INTERVAL_MS = 10000
 KEEPALIVE_INTERVAL_MS = 1000  # must stay <= 2000
+
+# The interval is the minimum spacing between poll starts, not a guaranteed
+# sample rate. Suzuki request_sensors() takes ~200-250 ms. Kawasaki sends
+# seven sequential requests and needs ~1.1-1.3 s per sample, so lower
+# settings simply poll back-to-back on a Kawasaki.
 LOOP_SLEEP_MS = 20
 RECONNECT_MIN_MS = 2000
 RECONNECT_MAX_MS = 60000
@@ -428,12 +433,10 @@ def run(ecu, ble_stream):
             else:
                 _log_errors("sensor poll failed", ecu)
 
+            # Measure the interval from the start of the poll. If the poll
+            # itself took longer (for example Kawasaki's seven requests), the
+            # next one starts immediately after the loop sleep.
             next_poll = time.ticks_add(started, poll_interval_ms)
-            if time.ticks_diff(time.ticks_ms(), next_poll) >= 0:
-                # The poll overran its slot; wait a full interval.
-                next_poll = time.ticks_add(
-                    time.ticks_ms(), poll_interval_ms
-                )
 
             # A long failed poll may have passed the 2 s link expiry.
             if not ecu.keep_alive(KEEPALIVE_INTERVAL_MS):

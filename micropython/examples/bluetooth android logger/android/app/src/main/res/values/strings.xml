@@ -25,7 +25,7 @@
 
     <string name="status_idle">Disconnected</string>
     <string name="status_detail_idle">Scan for the ESP32 and connect.</string>
-    <string name="ack_applied">Interval %1$.1f s applied</string>
+    <string name="ack_applied">Interval %1$.2f s applied</string>
     <string name="ack_failed">Interval update failed: %1$s</string>
     <string name="log_started">Logging to %1$s</string>
     <string name="log_saved">Log saved: %1$s (%2$d rows)</string>
@@ -35,6 +35,8 @@
     <string name="no_log">No CSV log to share yet.</string>
 
     <string-array name="interval_options">
+        <item>0.25 s</item>
+        <item>0.5 s</item>
         <item>1 s</item>
         <item>2 s</item>
         <item>5 s</item>

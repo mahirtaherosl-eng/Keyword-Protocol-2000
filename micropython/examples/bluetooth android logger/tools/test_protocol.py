@@ -15,6 +15,7 @@ import os
 import sys
 import types
 import unittest
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLE_DIR = os.path.dirname(HERE)
@@ -25,6 +26,11 @@ KOTLIN_DIR = os.path.join(
     "com", "example", "kwpblelogger",
 )
 RECEIVER_PATH = os.path.join(HERE, "ble_receiver.py")
+STRINGS_PATH = os.path.join(
+    EXAMPLE_DIR, "android", "app", "src", "main", "res", "values",
+    "strings.xml",
+)
+README_PATH = os.path.join(EXAMPLE_DIR, "README.md")
 
 CSV_HEADER = (
     "timestamp_iso,seq,uptime_ms,gps,clutch,rpm,speed,tps,"
@@ -199,6 +205,21 @@ class ProtocolTests(unittest.TestCase):
             ack, {"ack": "interval", "ms": 3000, "ok": True}
         )
 
+    def test_control_accepts_minimum(self):
+        interval, ack = app.handle_control(
+            b'{"cmd":"interval","ms":250}', 2000
+        )
+        self.assertEqual(app.MIN_POLL_INTERVAL_MS, 250)
+        self.assertEqual(interval, 250)
+        self.assertTrue(ack["ok"])
+
+    def test_control_clamps_below_minimum(self):
+        interval, ack = app.handle_control(
+            b'{"cmd":"interval","ms":249}', 2000
+        )
+        self.assertEqual(interval, app.MIN_POLL_INTERVAL_MS)
+        self.assertTrue(ack["ok"])
+
     def test_control_clamps_low(self):
         interval, ack = app.handle_control(
             b'{"cmd":"interval","ms":1}', 2000
@@ -253,6 +274,29 @@ class CrossFileTests(unittest.TestCase):
         receiver = self.read(RECEIVER_PATH)
         self.assertIn(CSV_HEADER, kotlin)
         self.assertIn(CSV_HEADER, receiver)
+
+    def test_interval_options_match(self):
+        kotlin = self.read(os.path.join(KOTLIN_DIR, "MainActivity.kt"))
+        esp32 = self.read(APP_PATH)
+        receiver = self.read(RECEIVER_PATH)
+        readme = self.read(README_PATH)
+
+        self.assertIn(
+            "intArrayOf(250, 500, 1000, 2000, 5000, 10000)", kotlin
+        )
+        self.assertIn("MIN_POLL_INTERVAL_MS = 250", esp32)
+        self.assertIn("250-10000", receiver)
+        self.assertIn("250-10000", readme)
+
+        root = ET.parse(STRINGS_PATH).getroot()
+        array = next(
+            item for item in root.findall("string-array")
+            if item.get("name") == "interval_options"
+        )
+        labels = [item.text for item in array.findall("item")]
+        self.assertEqual(
+            labels, ["0.25 s", "0.5 s", "1 s", "2 s", "5 s", "10 s"]
+        )
 
 
 if __name__ == "__main__":

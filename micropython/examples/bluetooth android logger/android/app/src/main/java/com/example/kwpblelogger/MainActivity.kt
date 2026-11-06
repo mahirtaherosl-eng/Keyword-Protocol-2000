@@ -45,7 +45,8 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
     private lateinit var deviceAdapter: ArrayAdapter<String>
 
     private val scanDevices = ArrayList<BleSensorClient.ScanEntry>()
-    private val intervalOptions = intArrayOf(1000, 2000, 5000, 10000)
+    private val intervalOptions =
+        intArrayOf(250, 500, 1000, 2000, 5000, 10000)
 
     @Volatile private var currentState = BleSensorClient.State.IDLE
     private var logging = false
