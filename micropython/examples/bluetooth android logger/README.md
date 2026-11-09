@@ -1,9 +1,10 @@
 # Bluetooth Android logger (ESP32-C6)
 
-An ESP32-C6 running MicroPython polls every KWP2000 sensor value and streams it
-over **Bluetooth Low Energy** as newline-delimited JSON. An Android app scans
-for the board, shows a live dashboard, logs every sample to CSV, shares the
-file, and can change the sensor polling interval from the phone.
+An ESP32-C6 running MicroPython polls the selected KWP2000 sensors and streams
+them over **Bluetooth Low Energy** as newline-delimited JSON. An Android app
+scans for the board, chooses which sensors to poll, shows a live dashboard,
+logs every sample to CSV, shares the file, and can set a fixed polling interval
+or **Auto (fastest)**.
 
 ```text
 K-line (12 V) -> L9637 -> ESP32-C6 UART1 -> BLE GATT -> Android app (CSV)
@@ -54,14 +55,16 @@ that passes a plain loopback (for example 1/2 or 18/19) and update the config.
    ```
 
 2. Install the library and the program (quote the paths because the example
-   folder has spaces):
+   folder has spaces). Copy the **local** `kwp2000.py`, not just the published
+   package: the Kawasaki two-byte speed/TPS decoding lives in this checkout.
 
    ```sh
-   mpremote mip install github:mahirtaherosl-eng/Keyword-Protocol-2000
+   mpremote fs cp "micropython/kwp2000.py" :lib/kwp2000.py
    mpremote fs cp "micropython/examples/bluetooth android logger/esp32_ble_logger.py" :main.py
    ```
 
-   Or copy `micropython/kwp2000.py` to `:lib/kwp2000.py` manually.
+   `mip install github:mahirtaherosl-eng/Keyword-Protocol-2000` installs the
+   published GitHub version, which may not contain local changes.
 
 3. Reset the board. The serial console prints `BLE advertising as KWP2000-C6`.
    The program does not auto-start KWP2000 polling until a phone connects.
@@ -77,19 +80,24 @@ Edit the block at the top of `esp32_ble_logger.py`:
 | `UART_ID`, `TX_PIN`, `RX_PIN` | `1, 19, 20` | K-line UART |
 | `L9637_VCC_PIN` | `22` | Switched L9637 logic VCC |
 | `POLL_INTERVAL_MS` | `2000` | Default poll period |
-| `MIN/MAX_POLL_INTERVAL_MS` | `250/10000` | Accepted phone range |
+| `MIN/MAX_POLL_INTERVAL_MS` | `250/10000` | Accepted phone range; `0` = Auto |
 | `KEEPALIVE_INTERVAL_MS` | `1000` | Must stay below the 2 s link expiry |
 | `SIMULATE` | `False` | Synthetic sensors; no UART/ECU |
 | `DEBUG_LEVEL` | `DEBUG_NONE` | Set `DEBUG_DEFAULT` during bring-up |
+
+`interval_ms = 0` is **Auto**: the ESP32 polls back-to-back, so the cycle time
+is determined by the brand and number of selected sensors.
 
 **Bench test without a bike:** set `SIMULATE = True`, flash, and connect with
 the Android app or the PC receiver. The BLE, JSON, control and CSV paths work
 without an ECU.
 
 **Blocking budget:** `request_sensors()` can block ~6.5 s (Suzuki) or
-~44-45 s (Kawasaki) on a silent bus; `connect()` up to ~7.5 s and
-`disconnect()` up to ~8.5 s. No watchdog is enabled. If you enable one, use a
-timeout well above these values; it cannot be fed inside a library call.
+~44-45 s (Kawasaki, all seven requests) on a silent bus; `connect()` up to
+~7.5 s and `disconnect()` up to ~8.5 s. A smaller Kawasaki selection has a
+shorter worst case (roughly 6.5 s per selected request). No watchdog is
+enabled. If you enable one, use a timeout well above these values; it cannot
+be fed inside a library call.
 
 ## BLE protocol
 
@@ -114,10 +122,11 @@ must buffer chunks and split on `\n`.
 {"seq":42,"ms":123456,"gps":3,"clutch":null,"rpm":3125,"speed":48,"tps":14.2,"stps":null,"iap":101,"iat":26.5,"ect":81,"voltage":null}
 ```
 
-- Fixed keys: `seq`, `ms`, then `gps, clutch, rpm, speed, tps, stps, iap, iat,
-  ect, voltage`.
-- `null` means "no value" (not zero). Kawasaki normally leaves `clutch`,
-  `stps` and `voltage` null.
+- Keys: `seq`, `ms`, then only the sensors selected in the config. A subset
+  sample looks like `{"seq":42,"ms":123456,"rpm":3125,"speed":48,"ect":81}`.
+- `null` means "no value"; unselected sensors are absent from the JSON (the app
+  shows "—" and the CSV column is empty).
+- Kawasaki `clutch`, `stps` and `voltage` are not selectable for polling.
 - Floats are rounded to two decimals. `seq` restarts at 1 after an ESP32
   reboot; `ms` is board uptime and wraps.
 - The library keeps the previous value after a failed refresh, so use
@@ -127,33 +136,46 @@ Kawasaki two-byte speed/TPS replies are decoded by `kwp2000.py`: speed is
 `(b2 * 100 + b3) / 2` km/h and TPS is `125 * (u16 - 201) / (405 - 201)` with
 `u16 = (b2 << 8) | b3`. One-byte replies keep the raw byte.
 
-### Update-interval control
+### Config control (sensors + rate)
 
 Write one JSON line to the control characteristic:
 
 ```json
-{"cmd":"interval","ms":2000}
+{"cmd":"config","interval_ms":0,"sensors":["rpm","speed","ect"]}
 ```
 
-The accepted range is 250-10000 ms; values outside it are clamped. The
-interval is the **minimum spacing between poll starts**, not a guaranteed
-sample rate:
+- `interval_ms`: `0` = **Auto (fastest)**; otherwise clamped to 250-10000 ms.
+- `sensors`: optional subset. The ESP32 filters it to the brand's supported
+  keys: Kawasaki supports `gps, rpm, speed, tps, iap, iat, ect`; Suzuki
+  supports all ten (always fetched in one block).
+- The interval is the **minimum spacing between poll starts**, not a guaranteed
+  sample rate. With Auto, the next poll starts immediately after the previous
+  one; the library's P3/P4 gaps still apply.
+- The legacy `{"cmd":"interval","ms":...}` and
+  `{"cmd":"sensors","keys":[...]}` commands remain supported (used by the PC
+  receiver).
 
-- Suzuki `request_sensors()` is one request and takes ~200-250 ms, so the
-  0.25 s option gives roughly 4 samples/s.
-- Kawasaki `request_sensors()` sends seven requests and needs ~1.1-1.3 s per
-  sample. Choosing 0.25 s or 0.5 s makes it poll back-to-back at that natural
-  rate; it cannot reach 4 samples/s.
-
-The ESP32 replies on the sensor characteristic with:
+The ESP32 ACKs on the sensor characteristic and reports its capabilities:
 
 ```json
-{"ack":"interval","ms":2000,"ok":true}
+{"ack":"config","ok":true,"brand":"kawasaki","interval_ms":0,
+ "sensors":["rpm","speed","ect"],
+ "supported":["gps","rpm","speed","tps","iap","iat","ect"]}
 ```
 
-Invalid commands return `ok:false` and an `error` string. ACK lines are never
-logged to CSV or shown as sensor values. An interval command that arrives
-during a blocking sensor poll is applied when the poll returns.
+Invalid commands return `ok:false`, an `error`, and the still-applied config.
+The app uses `supported` to disable unavailable checkboxes. ACK lines are never
+logged to CSV or shown as sensor values. A config that arrives during a
+blocking sensor poll is applied when the poll returns.
+
+Subset behavior:
+
+- **Kawasaki:** one request per selected sensor. Two sensors take roughly
+  0.3-0.4 s per cycle; all seven take ~1.1-1.3 s. This is where Auto gets its
+  speed.
+- **Suzuki:** one `21 08` block is always requested (~200-250 ms), so a subset
+  does not reduce the cycle time; it only changes which values are streamed and
+  logged.
 
 ## Android app
 
@@ -183,13 +205,15 @@ third-party libraries.
 1. Tap **Scan**. On Android 12+ grant **Nearby devices**; on Android 11 and
    below grant location and enable location services.
 2. Tap `KWP2000-C6` in the device list.
-3. The dashboard updates once per poll. Choose **Update interval** (0.25, 0.5,
-   1, 2, 5 or 10 s); the app writes the command and shows the ACK.
+3. Choose **Polling rate**: **Auto (fastest)** or 0.25-10 s. Choose the
+   **Sensors to poll**; unsupported Kawasaki sensors are disabled after the
+   first ACK. The app writes the config and shows the ACK, and
+   `Rate: x.x samples/s` reports the measured result.
 4. Tap **Start logging** to begin CSV capture, then **Stop logging**.
 5. Tap **Share CSV** to export the file through any file-capable app.
 
 If the BLE link drops unexpectedly, the app reconnects with a 1-30 s backoff
-and re-sends the selected interval. The interval is stored in
+and re-sends the sensor/rate config. Both settings are stored in
 `SharedPreferences` and restored after an app restart.
 
 ### CSV files
@@ -208,8 +232,9 @@ timestamp_iso,seq,uptime_ms,gps,clutch,rpm,speed,tps,stps,iap,iat,ect,voltage
 ```
 
 `timestamp_iso` is the phone's wall clock when the sample arrived; `uptime_ms`
-is the ESP32 uptime. Null sensors are empty fields. Rows are flushed as they
-are written.
+is the ESP32 uptime. Null or unselected sensors are empty fields. The header is
+fixed, so one log can span selection changes. Rows are flushed as they are
+written.
 
 Pull the logs with adb:
 
@@ -228,7 +253,8 @@ python "micropython/examples/bluetooth android logger/tools/ble_receiver.py" --c
 ```
 
 Options: `--address` (skip scanning), `--scan-timeout`, `--duration` (0 =
-until Ctrl-C), `--csv`, `--interval` (write a control command).
+until Ctrl-C), `--csv`, `--interval` (0 = Auto, else 250-10000 ms),
+`--sensors` (comma-separated keys, e.g. `rpm,speed,ect`).
 
 ## Verification
 
@@ -241,19 +267,23 @@ python "micropython/examples/bluetooth android logger/tools/test_protocol.py"
 python -m unittest discover -s micropython/tests -p "test_*.py" -v
 ```
 
-The protocol tests cover JSON keys/rounding, MTU chunking, advertising bytes,
-control clamping/ACKs, and cross-file UUID/CSV consistency. The library suite
-covers the Kawasaki two-byte speed/TPS formulas.
+The protocol tests cover JSON keys/rounding, subset samples, MTU chunking,
+advertising bytes, config/Auto/capability handling, and cross-file UUID/CSV/
+sensor-key consistency. The library suite covers subset requests and the
+Kawasaki two-byte speed/TPS formulas.
 
 Hardware smoke test:
 
 1. `SIMULATE = True`; confirm advertising on the serial console.
 2. Connect with the app (or PC receiver) and watch samples arrive.
-3. Change the interval and confirm the ACK and new cadence.
-4. Log for 60 s, stop, share/open the CSV.
-5. Set `SIMULATE = False`, turn on the ignition, and confirm plausible values.
-6. Unplug the K-line mid-log: expect a pause up to ~44 s on a failed Kawasaki
-   poll, then reconnect backoff; the ESP32 must not reset.
+3. Select two Kawasaki sensors and Auto; confirm the rate rises (roughly
+   0.3-0.4 s per cycle) versus all seven (~1.1-1.3 s).
+4. Confirm Kawasaki `clutch`/`stps`/`voltage` checkboxes become disabled.
+5. Select a fixed 2 s rate and confirm the cadence throttles.
+6. Log for 60 s, stop, share/open the CSV; unselected sensors are empty.
+7. Set `SIMULATE = False`, turn on the ignition, and confirm plausible values.
+8. Unplug the K-line mid-log: expect a pause up to ~44 s on a failed Kawasaki
+   poll (all seven selected), then reconnect backoff; the ESP32 must not reset.
 
 ## Troubleshooting
 
@@ -262,8 +292,11 @@ Hardware smoke test:
 | No device in the scan | Nearby devices permission, Bluetooth on, BLE firmware (`import bluetooth`), correct UUID, range. Android 11 and below also needs location services. |
 | Connects but no values | ESP32 serial console: is `connect()` succeeding? Check ignition, K-line wiring, `BRAND`, L9637 VCC/VS. The app detail line should reach "Connected · MTU ...". |
 | Values are null | Normal for Kawasaki `clutch`, `stps`, `voltage`; also null before the first successful poll. |
-| Interval change has no effect | Wait for the ACK; the ESP32 applies it after any blocking poll. Values are clamped to 0.25-10 s. Kawasaki still needs ~1.1-1.3 s per sample. |
-| Updates pause for tens of seconds | A failed Kawasaki `request_sensors()` blocks ~44 s. This is a library/bus limitation, not BLE. |
+| Config change has no effect | Wait for the ACK; the ESP32 applies it after any blocking poll. Fixed values are clamped to 0.25-10 s; Auto is 0. Kawasaki still needs ~1.1-1.3 s for all seven sensors. |
+| A sensor checkbox is disabled | The ESP32's `supported` list excludes it; Kawasaki cannot poll clutch, STPS or voltage. |
+| "Config needs MTU 128+" | The phone negotiated a small BLE MTU; the config JSON does not fit in one write. Reconnect or use a phone/stack that negotiates MTU 247. |
+| Auto is not faster on Suzuki | Suzuki always fetches one `21 08` block (~200-250 ms); the subset only changes what is streamed/logged. |
+| Updates pause for tens of seconds | A failed Kawasaki `request_sensors()` blocks ~44 s with all seven sensors selected. This is a library/bus limitation, not BLE. |
 | Watchdog resets | Disable it or use >60 s; it cannot be fed inside a library call. |
 | ESP32 resets/hangs | Keep the CPU frequency at the default (>=80 MHz); do not enable WiFi in this example. |
 | CSV not visible in a file manager | It is app-specific storage. Use **Share CSV** or `adb pull`. |
@@ -276,5 +309,8 @@ Hardware smoke test:
 - No foreground service: logging pauses if Android kills the app in the
   background.
 - Sensor values kept after a failed refresh can be stale; use `seq`/`ms`.
+- Auto polling produces the highest ECU/BLE/CSV load; keep a fixed rate if you
+  do not need the extra samples.
+- Suzuki's subset selection does not reduce K-line time; only Kawasaki's does.
 - Yamaha and Honda remain raw-request-only in the library.
 - The example is configured for the ESP32-C6; other boards need UART/pin edits.

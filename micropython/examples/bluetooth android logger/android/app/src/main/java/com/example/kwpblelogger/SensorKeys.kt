@@ -1,5 +1,6 @@
 package com.example.kwpblelogger
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Sensor keys, JSON parsing and the two line types sent by the ESP32. */
@@ -28,20 +29,38 @@ object SensorKeys {
         }
     }
 
-    /** Parse an interval ACK; returns null for sensor samples or bad JSON. */
+    /** Parse a config ACK; returns null for sensor samples or bad JSON. */
     fun parseAck(line: String): Ack? {
         return try {
             val json = JSONObject(line)
             if (!json.has("ack")) return null
             Ack(
+                command = json.optString("ack"),
                 ok = json.optBoolean("ok", false),
-                ms = if (json.has("ms")) json.optInt("ms") else null,
+                intervalMs = when {
+                    json.has("interval_ms") -> json.optInt("interval_ms")
+                    json.has("ms") -> json.optInt("ms")
+                    else -> null
+                },
+                sensors = jsonArrayToList(json.optJSONArray("sensors")),
+                supported = jsonArrayToList(json.optJSONArray("supported")),
+                brand = if (json.isNull("brand")) null else json.optString("brand")
+                    .takeIf { it.isNotEmpty() },
                 error = if (json.isNull("error")) null else json.optString("error")
                     .takeIf { it.isNotEmpty() }
             )
         } catch (e: Exception) {
             null
         }
+    }
+
+    private fun jsonArrayToList(array: JSONArray?): List<String>? {
+        if (array == null) return null
+        val values = ArrayList<String>(array.length())
+        for (i in 0 until array.length()) {
+            values.add(array.optString(i))
+        }
+        return values
     }
 }
 
@@ -52,7 +71,11 @@ data class SensorSample(
 )
 
 data class Ack(
+    val command: String,
     val ok: Boolean,
-    val ms: Int?,
+    val intervalMs: Int?,
+    val sensors: List<String>?,
+    val supported: List<String>?,
+    val brand: String?,
     val error: String?
 )

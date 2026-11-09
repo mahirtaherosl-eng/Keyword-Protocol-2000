@@ -132,7 +132,7 @@ KWP2000.ERR_START, KWP2000.ERR_STOP, KWP2000.ERR_TIMEOUT, ...
 | ------ | ----------- |
 | `connect()` | Fast-init waveform + start communication. Returns `True` on success or if already connected. |
 | `disconnect()` | Sends stop communication, waits for P3 max, marks disconnected. Returns `False` if the stop request failed. |
-| `request_sensors()` | Requests and decodes the brand's sensor block. Returns `True` only if every request succeeded. |
+| `request_sensors(only=None)` | Requests and decodes sensor values. `only` optionally limits Kawasaki requests to an iterable of names (for example `("rpm", "speed")`); Suzuki always requests its single block. Returns `True` only if every request sent succeeded. |
 | `keep_alive(interval_ms=0)` | Sends tester-present (Suzuki/Yamaha/Honda) or a GPS request (Kawasaki) when needed. Returns `False` if disconnected/expired. |
 | `handle_request(payload, attempts=3, check_response=True)` | Raw request escape hatch. The header and checksum are added. `attempts` is clamped to 1..3. |
 | `read_trouble_codes(which=READ_ONLY_ACTIVE)` | Returns a list of `(code, status)` tuples. `status` is `None` for 2-byte records and an int for `READ_ALL`. |
@@ -140,6 +140,10 @@ KWP2000.ERR_START, KWP2000.ERR_STOP, KWP2000.ERR_TIMEOUT, ...
 
 Protocol failures return `False` (or an empty list) and set error flags.
 Invalid arguments raise `ValueError`. A missing UART/pin raises `RuntimeError`.
+
+Use a subset to shorten a Kawasaki cycle: `ecu.request_sensors(only=("rpm",
+"speed"))` sends only those two requests. Suzuki still sends one `21 08` block
+and decodes all values, so the subset only affects what the caller uses.
 
 ### Sensor properties
 

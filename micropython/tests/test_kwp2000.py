@@ -471,6 +471,16 @@ class TestSuzukiSensors(KWPTestCase):
         self.assertAlmostEqual(self.device.ect, 40.0)
         self.assertAlmostEqual(self.device.voltage, 1600 / 126)
 
+    def test_subset_still_reads_single_block(self):
+        self.assertTrue(self.device.request_sensors(only=["rpm"]))
+        sensor_requests = [
+            request for request in self.ecu.requests
+            if request[:1] == b"\x21"
+        ]
+        self.assertEqual(sensor_requests, [b"\x21\x08"])
+        self.assertAlmostEqual(self.device.rpm, 512.0)
+        self.assertEqual(self.device.speed, 200)
+
     def test_rpm_not_truncated_to_byte(self):
         self.assertTrue(self.device.request_sensors())
         self.assertGreater(self.device.rpm, 255)
@@ -522,6 +532,14 @@ class TestSuzukiSensors(KWPTestCase):
             self.uart, "suzuki", tx_pin=self.pin, rx_pin=16
         )
         self.assertFalse(device.request_sensors())
+        self.assertTrue(device.error_flags & kwp2000.ERR_USER)
+
+    def test_request_sensors_subset_requires_connection(self):
+        device = kwp2000.KWP2000(
+            self.uart, "suzuki", tx_pin=self.pin, rx_pin=16
+        )
+        # The connection check runs before argument validation.
+        self.assertFalse(device.request_sensors(only=["bogus"]))
         self.assertTrue(device.error_flags & kwp2000.ERR_USER)
 
     def test_sensors_property_applies_units(self):
@@ -579,6 +597,34 @@ class TestKawasakiSensors(KWPTestCase):
             b"\x21\x05",
             b"\x21\x06",
         ])
+
+    def test_subset_sends_only_selected_requests(self):
+        self.assertTrue(self.device.request_sensors(only=["rpm", "speed"]))
+        sensor_requests = [
+            request for request in self.ecu.requests
+            if request[:1] == b"\x21"
+        ]
+        self.assertEqual(sensor_requests, [b"\x21\x09", b"\x21\x0C"])
+        self.assertIsNone(self.device.gps)
+        self.assertIsNotNone(self.device.rpm)
+        self.assertIsNotNone(self.device.speed)
+
+    def test_single_sensor_name(self):
+        self.assertTrue(self.device.request_sensors(only="rpm"))
+        sensor_requests = [
+            request for request in self.ecu.requests
+            if request[:1] == b"\x21"
+        ]
+        self.assertEqual(sensor_requests, [b"\x21\x09"])
+        self.assertIsNone(self.device.speed)
+
+    def test_unknown_sensor_name_raises(self):
+        with self.assertRaises(ValueError):
+            self.device.request_sensors(only=["bogus"])
+
+    def test_non_pollable_selection_fails(self):
+        self.assertFalse(self.device.request_sensors(only=["clutch"]))
+        self.assertTrue(self.device.error_flags & kwp2000.ERR_USER)
 
     def test_rpm_formula(self):
         self.assertTrue(self.device.request_sensors())

@@ -130,12 +130,20 @@ async def run(args):
         async with BleakClient(target) as client:
             await client.start_notify(SENSOR_UUID, handle_notification)
             print("Subscribed to sensor notifications.")
-            if args.interval:
-                payload = ('{"cmd":"interval","ms":%d}\n' % args.interval).encode()
+            config = {"cmd": "config"}
+            if args.interval is not None:
+                config["interval_ms"] = args.interval
+            if args.sensors:
+                config["sensors"] = [
+                    key.strip() for key in args.sensors.split(",")
+                    if key.strip()
+                ]
+            if len(config) > 1:
+                payload = (json.dumps(config) + "\n").encode()
                 await client.write_gatt_char(
                     CONTROL_UUID, payload, response=True
                 )
-                print("Requested interval:", args.interval, "ms")
+                print("Requested config:", config)
             if args.duration > 0:
                 await asyncio.sleep(args.duration)
             else:
@@ -168,7 +176,11 @@ def main():
     parser.add_argument("--csv", help="write samples to this CSV file")
     parser.add_argument(
         "--interval", type=int,
-        help="write an update-interval command (250-10000 ms)",
+        help="polling interval in ms (0 = Auto, else 250-10000)",
+    )
+    parser.add_argument(
+        "--sensors",
+        help="comma-separated sensor keys to poll (e.g. rpm,speed,ect)",
     )
     args = parser.parse_args()
 

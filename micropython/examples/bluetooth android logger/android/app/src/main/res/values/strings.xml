@@ -6,11 +6,19 @@
     <string name="start_logging">Start logging</string>
     <string name="stop_logging">Stop logging</string>
     <string name="share_csv">Share CSV</string>
-    <string name="interval_label">Update interval</string>
+    <string name="interval_label">Polling rate</string>
+    <string name="sensors_label">Sensors to poll</string>
     <string name="devices_label">Nearby devices</string>
     <string name="value_none">—</string>
     <string name="last_sample_initial">Last sample: —</string>
     <string name="last_sample_format">Last sample: seq %1$d, %2$d ms uptime</string>
+    <string name="rate_initial">Rate: —</string>
+    <string name="rate_format">Rate: %1$.1f samples/s</string>
+    <string name="auto_fastest">Auto (fastest)</string>
+    <string name="select_sensor">Select at least one sensor.</string>
+    <string name="config_applied">%1$s · %2$d sensors</string>
+    <string name="config_applied_brand">%1$s · %2$s · %3$d sensors</string>
+    <string name="config_failed">Config failed: %1$s</string>
 
     <string name="gps_label">GPS</string>
     <string name="clutch_label">Clutch</string>
@@ -35,6 +43,7 @@
     <string name="no_log">No CSV log to share yet.</string>
 
     <string-array name="interval_options">
+        <item>Auto (fastest)</item>
         <item>0.25 s</item>
         <item>0.5 s</item>
         <item>1 s</item>

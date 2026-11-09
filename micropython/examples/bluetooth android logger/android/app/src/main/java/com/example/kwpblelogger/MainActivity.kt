@@ -16,6 +16,7 @@ import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.ListView
 import android.widget.Spinner
 import android.widget.TextView
@@ -38,7 +39,9 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
     private lateinit var devicesLabel: TextView
     private lateinit var scanList: ListView
     private lateinit var lastSampleText: TextView
+    private lateinit var rateText: TextView
     private lateinit var valueViews: Map<String, TextView>
+    private lateinit var sensorChecks: Map<String, CheckBox>
 
     private lateinit var bleClient: BleSensorClient
     private lateinit var csvLogger: CsvLogger
@@ -46,11 +49,17 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
 
     private val scanDevices = ArrayList<BleSensorClient.ScanEntry>()
     private val intervalOptions =
-        intArrayOf(250, 500, 1000, 2000, 5000, 10000)
+        intArrayOf(0, 250, 500, 1000, 2000, 5000, 10000)
 
     @Volatile private var currentState = BleSensorClient.State.IDLE
     private var logging = false
     private var currentLogFile: File? = null
+
+    private var supportedSensors: Set<String> = SensorKeys.ALL.toSet()
+    private var updatingUi = false
+    private var lastRateUptimeMs = -1L
+    private var lastRateSeq = -1L
+    private var smoothedRate = 0.0
 
     private val prefs by lazy {
         getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -90,6 +99,7 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
         devicesLabel = findViewById(R.id.devicesLabel)
         scanList = findViewById(R.id.scanList)
         lastSampleText = findViewById(R.id.lastSampleText)
+        rateText = findViewById(R.id.rateText)
 
         valueViews = mapOf(
             "gps" to findViewById<TextView>(R.id.value_gps),
@@ -102,6 +112,19 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
             "iat" to findViewById<TextView>(R.id.value_iat),
             "ect" to findViewById<TextView>(R.id.value_ect),
             "voltage" to findViewById<TextView>(R.id.value_voltage)
+        )
+
+        sensorChecks = mapOf(
+            "gps" to findViewById<CheckBox>(R.id.sensor_gps),
+            "clutch" to findViewById<CheckBox>(R.id.sensor_clutch),
+            "rpm" to findViewById<CheckBox>(R.id.sensor_rpm),
+            "speed" to findViewById<CheckBox>(R.id.sensor_speed),
+            "tps" to findViewById<CheckBox>(R.id.sensor_tps),
+            "stps" to findViewById<CheckBox>(R.id.sensor_stps),
+            "iap" to findViewById<CheckBox>(R.id.sensor_iap),
+            "iat" to findViewById<CheckBox>(R.id.sensor_iat),
+            "ect" to findViewById<CheckBox>(R.id.sensor_ect),
+            "voltage" to findViewById<CheckBox>(R.id.sensor_voltage)
         )
 
         bleClient = BleSensorClient(this, this)
@@ -134,6 +157,18 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
         intervalSpinner.setSelection(
             intervalOptions.indexOf(savedInterval).coerceAtLeast(0), false
         )
+
+        var savedSensors = prefs.getStringSet(KEY_SENSORS, null)
+            ?: SensorKeys.ALL.toSet()
+        if (savedSensors.isEmpty()) savedSensors = SensorKeys.ALL.toSet()
+
+        updatingUi = true
+        for ((key, check) in sensorChecks) {
+            check.isChecked = key in savedSensors
+            check.setOnCheckedChangeListener { button, _ ->
+                onSensorToggled(button as CheckBox)
+            }
+        }
         intervalSpinner.onItemSelectedListener =
             object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(
@@ -142,17 +177,14 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
                     position: Int,
                     id: Long
                 ) {
-                    val ms = intervalOptions[
-                        position.coerceIn(0, intervalOptions.lastIndex)
-                    ]
-                    prefs.edit().putInt(KEY_INTERVAL, ms).apply()
-                    bleClient.setInterval(ms)
+                    applyConfig()
                 }
 
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             }
+        updatingUi = false
 
-        bleClient.setInterval(selectedIntervalMs())
+        applyConfig()
         updateUiForState(
             BleSensorClient.State.IDLE,
             getString(R.string.status_detail_idle)
@@ -275,7 +307,7 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
             state == BleSensorClient.State.ERROR
         disconnectButton.isEnabled = state != BleSensorClient.State.IDLE
         logButton.isEnabled = ready
-        intervalSpinner.isEnabled = ready
+        intervalSpinner.isEnabled = true
     }
 
     override fun onSample(sample: SensorSample) {
@@ -290,15 +322,112 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
         lastSampleText.text = getString(
             R.string.last_sample_format, sample.seq, sample.uptimeMs
         )
+
+        val dt = if (lastRateUptimeMs >= 0) {
+            sample.uptimeMs - lastRateUptimeMs
+        } else {
+            -1L
+        }
+        if (lastRateSeq >= 0 && sample.seq <= lastRateSeq) {
+            smoothedRate = 0.0
+            rateText.text = getString(R.string.rate_initial)
+        } else if (dt in 1L..30000L) {
+            val instant = 1000.0 / dt
+            smoothedRate = if (smoothedRate <= 0.0) {
+                instant
+            } else {
+                smoothedRate * 0.8 + instant * 0.2
+            }
+            rateText.text = getString(R.string.rate_format, smoothedRate)
+        } else if (dt > 30000L) {
+            smoothedRate = 0.0
+            rateText.text = getString(R.string.rate_initial)
+        }
+        lastRateUptimeMs = sample.uptimeMs
+        lastRateSeq = sample.seq
+
         if (logging) csvLogger.append(sample)
     }
 
     override fun onAck(ack: Ack) {
-        val ackMs = ack.ms
-        detailText.text = if (ack.ok && ackMs != null) {
-            getString(R.string.ack_applied, ackMs / 1000.0)
+        val supported = ack.supported
+        if (supported != null && supported.isNotEmpty()) {
+            supportedSensors = supported.toSet()
+        }
+        val applied = ack.sensors
+        if (supported != null || applied != null) {
+            updatingUi = true
+            for ((key, check) in sensorChecks) {
+                val isSupported = key in supportedSensors
+                check.isEnabled = isSupported
+                if (!isSupported) {
+                    check.isChecked = false
+                } else if (applied != null) {
+                    check.isChecked = key in applied
+                }
+            }
+            updatingUi = false
+            if (applied != null) {
+                prefs.edit().putStringSet(KEY_SENSORS, applied.toSet()).apply()
+            }
+        }
+
+        detailText.text = if (ack.ok) {
+            val intervalText = when (val ms = ack.intervalMs) {
+                null -> ""
+                0 -> getString(R.string.auto_fastest)
+                else -> String.format(Locale.US, "%.2f s", ms / 1000.0)
+            }
+            val count = ack.sensors?.size
+                ?: sensorChecks.count { it.value.isChecked }
+            val brand = ack.brand
+            if (brand.isNullOrEmpty()) {
+                getString(R.string.config_applied, intervalText, count)
+            } else {
+                getString(
+                    R.string.config_applied_brand, brand, intervalText, count
+                )
+            }
         } else {
-            getString(R.string.ack_failed, ack.error ?: "unknown")
+            getString(R.string.config_failed, ack.error ?: "unknown")
+        }
+    }
+
+    private fun applyConfig() {
+        if (updatingUi) return
+        val sensors = sensorChecks.filterValues { it.isChecked }.keys
+            .filter { it in supportedSensors }
+        if (sensors.isEmpty()) {
+            showError(getString(R.string.select_sensor))
+            return
+        }
+        val interval = selectedIntervalMs()
+        prefs.edit()
+            .putInt(KEY_INTERVAL, interval)
+            .putStringSet(KEY_SENSORS, sensors.toSet())
+            .apply()
+        resetRate()
+        bleClient.setConfig(interval, sensors)
+    }
+
+    private fun onSensorToggled(button: CheckBox) {
+        if (updatingUi) return
+        if (sensorChecks.values.none { it.isChecked }) {
+            showError(getString(R.string.select_sensor))
+            updatingUi = true
+            button.isChecked = true
+            updatingUi = false
+            return
+        }
+        applyConfig()
+    }
+
+    private fun resetRate() {
+        lastRateUptimeMs = -1L
+        lastRateSeq = -1L
+        smoothedRate = 0.0
+        if (::rateText.isInitialized) {
+            rateText.text = getString(R.string.rate_initial)
         }
     }
 
@@ -395,6 +524,7 @@ class MainActivity : ComponentActivity(), BleSensorClient.Listener {
 
     private companion object {
         const val KEY_INTERVAL = "interval_ms"
+        const val KEY_SENSORS = "sensors"
         const val DEFAULT_INTERVAL_MS = 2000
     }
 }

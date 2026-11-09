@@ -22,6 +22,8 @@ import android.os.Looper
 import android.os.ParcelUuid
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Scans for, connects to, and reads the ESP32 BLE sensor service.
@@ -66,8 +68,8 @@ class BleSensorClient(
     @Volatile private var autoReconnect = false
     @Volatile private var lastDevice: BluetoothDevice? = null
     @Volatile private var reconnectAttempt = 0
-    @Volatile private var pendingIntervalMs: Int? = null
-    @Volatile private var lastIntervalMs: Int? = null
+    @Volatile private var pendingConfig: String? = null
+    @Volatile private var lastConfig: String? = null
     @Volatile private var writeInFlight = false
     @Volatile private var negotiatedMtu = 23
 
@@ -112,8 +114,8 @@ class BleSensorClient(
 
     private val writeTimeout = Runnable {
         writeInFlight = false
-        val next = pendingIntervalMs
-        if (next != null) sendInterval(next)
+        val next = pendingConfig
+        if (next != null) sendConfig(next)
     }
 
     private val scanTimeout = Runnable {
@@ -196,7 +198,12 @@ class BleSensorClient(
             if (gatt !== this@BleSensorClient.gatt) return
             mainHandler.removeCallbacks(mtuFallback)
             negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
-            if (state == State.NEGOTIATING_MTU) enableNotifications(gatt)
+            if (state == State.NEGOTIATING_MTU) {
+                enableNotifications(gatt)
+            } else if (state == State.READY) {
+                // A late MTU update may unblock the queued config.
+                lastConfig?.let { sendConfig(it) }
+            }
         }
 
         override fun onDescriptorWrite(
@@ -212,8 +219,8 @@ class BleSensorClient(
             }
             setState(State.READY, "Connected · MTU $negotiatedMtu")
             reconnectAttempt = 0
-            val next = lastIntervalMs
-            if (next != null) sendInterval(next)
+            val next = lastConfig
+            if (next != null) sendConfig(next)
         }
 
         override fun onCharacteristicWrite(
@@ -226,10 +233,10 @@ class BleSensorClient(
             mainHandler.removeCallbacks(writeTimeout)
             writeInFlight = false
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                mainHandler.post { listener.onError("Interval write failed ($status)") }
+                mainHandler.post { listener.onError("Config write failed ($status)") }
             }
-            val next = pendingIntervalMs
-            if (next != null) sendInterval(next)
+            val next = pendingConfig
+            if (next != null) sendConfig(next)
         }
 
         override fun onCharacteristicChanged(
@@ -343,11 +350,16 @@ class BleSensorClient(
         closeGatt()
     }
 
-    /** Send the update interval; stored and retried if not READY yet. */
-    fun setInterval(ms: Int) {
-        lastIntervalMs = ms
-        pendingIntervalMs = ms
-        sendInterval(ms)
+    /** Send the polling config; stored and retried if not READY yet. */
+    fun setConfig(intervalMs: Int, sensors: List<String>) {
+        val json = JSONObject()
+            .put("cmd", "config")
+            .put("interval_ms", intervalMs)
+            .put("sensors", JSONArray(sensors))
+            .toString() + "\n"
+        lastConfig = json
+        pendingConfig = json
+        sendConfig(json)
     }
 
     @SuppressLint("MissingPermission")
@@ -418,19 +430,28 @@ class BleSensorClient(
     }
 
     @SuppressLint("MissingPermission")
-    private fun sendInterval(ms: Int) {
+    private fun sendConfig(json: String) {
         val currentGatt = gatt
         val characteristic = controlChar
         if (currentGatt == null || characteristic == null || state != State.READY) {
-            pendingIntervalMs = ms
+            pendingConfig = json
+            return
+        }
+        if (negotiatedMtu < MIN_CONFIG_MTU) {
+            mainHandler.post {
+                listener.onError(
+                    "Config needs MTU $MIN_CONFIG_MTU+ " +
+                        "(negotiated $negotiatedMtu)"
+                )
+            }
+            pendingConfig = json
             return
         }
         if (writeInFlight) {
-            pendingIntervalMs = ms
+            pendingConfig = json
             return
         }
-        val payload = "{\"cmd\":\"interval\",\"ms\":$ms}\n"
-            .toByteArray(StandardCharsets.UTF_8)
+        val payload = json.toByteArray(StandardCharsets.UTF_8)
         val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // 0 is BluetoothStatusCodes.SUCCESS (API 33).
             currentGatt.writeCharacteristic(
@@ -448,13 +469,13 @@ class BleSensorClient(
         }
         if (started) {
             writeInFlight = true
-            pendingIntervalMs = null
+            pendingConfig = null
             mainHandler.postDelayed(writeTimeout, WRITE_TIMEOUT_MS)
         } else {
-            pendingIntervalMs = ms
+            pendingConfig = json
             mainHandler.postDelayed({
-                val next = pendingIntervalMs
-                if (next != null) sendInterval(next)
+                val next = pendingConfig
+                if (next != null) sendConfig(next)
             }, WRITE_RETRY_MS)
         }
     }
@@ -553,6 +574,7 @@ class BleSensorClient(
         const val WRITE_TIMEOUT_MS = 2000L
         const val WRITE_RETRY_MS = 500L
         const val MAX_RX_BUFFER = 8192
+        const val MIN_CONFIG_MTU = 128
         const val RECONNECT_BASE_MS = 1000L
         const val RECONNECT_MAX_MS = 30000L
     }

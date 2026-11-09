@@ -633,15 +633,33 @@ class KWP2000:
         self._log(self.DEBUG_DEFAULT, "ECU disconnected")
         return True
 
-    def request_sensors(self):
+    def request_sensors(self, only=None):
         """Request and decode the brand's sensor values.
 
-        Returns True only if every request required by the brand succeeded.
-        Values that could not be refreshed keep their previous value.
+        ``only`` optionally limits Kawasaki requests to an iterable of sensor
+        names (for example ``("rpm", "speed")``). Suzuki always requests its
+        single sensor block, so a subset only affects the caller's output.
+        Returns True only if every request that was sent succeeded. Values that
+        could not be refreshed keep their previous value.
         """
         if not self._connected:
             self._error_flags |= ERR_USER
             return False
+
+        if only is None:
+            selected = None
+        else:
+            if isinstance(only, str):
+                only = (only,)
+            try:
+                selected = set(only)
+            except TypeError:
+                raise ValueError("only must be an iterable of sensor names")
+            unknown = selected - set(self._sensors)
+            if unknown:
+                raise ValueError(
+                    "unknown sensor: %s" % ", ".join(sorted(unknown))
+                )
 
         if self._brand == BRAND_SUZUKI:
             if not self.handle_request(b"\x21\x08"):
@@ -650,13 +668,20 @@ class KWP2000:
 
         if self._brand == BRAND_KAWASAKI:
             ok = True
+            sent = 0
             for name, request in _KAWASAKI_REQUESTS:
+                if selected is not None and name not in selected:
+                    continue
+                sent += 1
                 if not self.handle_request(request):
                     ok = False
                     continue
                 value = self._decode_kawasaki(name, self._response_payload)
                 if value is not None:
                     self._sensors[name] = value
+            if sent == 0 and selected is not None:
+                self._error_flags |= ERR_USER
+                return False
             if ok:
                 self._last_sensors = ticks_ms()
             return ok

@@ -286,7 +286,7 @@ Error bits (also module-level `kwp2000.ERR_*`):
 | --- | --- | --- |
 | `connect()` | `bool` | Runs the fast-init waveform and handshake. Blocks ~1.1-1.3 s on success; ~3.2 s if the start handshake fails; Kawasaki can take ~7.5 s if the start succeeds but the diagnostic session fails. Returns `True` if already connected. Resets errors only when it actually starts a new connection. |
 | `disconnect()` | `bool` | Sends stop communication, waits 2000 ms, marks disconnected. ~2.1 s on success; ~8.5 s if all stop attempts time out. Preserves error flags and sensor values. Returns `True` if already disconnected. |
-| `request_sensors()` | `bool` | Suzuki: one request and a successful decode. Kawasaki: seven sequential requests; returns `True` only if every `handle_request()` succeeded (a short Kawasaki payload can still set `ERR_HEADER` while returning `True`). Sensor values refresh individually; failed values keep the old value. Requires connection. |
+| `request_sensors(only=None)` | `bool` | Suzuki: one request and a successful decode. Kawasaki: one request per selected sensor (all seven by default); with `only`, unselected requests are skipped and a selection with no Kawasaki request keys returns `False` + `ERR_USER`. Returns `True` only if every sent `handle_request()` succeeded (a short Kawasaki payload can still set `ERR_HEADER` while returning `True`). Sensor values refresh individually; failed values keep the old value. Requires connection. |
 | `keep_alive(interval_ms=0)` | `bool` | Drains RX, enforces the 2 s expiry, and sends tester-present (`3E 01`) or Kawasaki GPS (`21 0B`) when the link has been quiet longer than `interval_ms`. `0` = 1500 ms; values >2000 are clamped to 1500 and set `ERR_USER`. Returns `self.connected`, **not** whether its request succeeded. |
 | `handle_request(payload, attempts=3, check_response=True)` | `bool` | Raw request. `payload` is service byte + parameters only (1..255 bytes); the library adds header/length/addresses/checksum. `attempts` is clamped to 1..3. Does **not** check or set `connected`. With `check_response=False`, any complete checksum-valid frame returns `True`, but error flags/`last_nrc` are still updated. |
 | `read_trouble_codes(which=READ_ONLY_ACTIVE)` | `list[tuple[int, int|None]]` | Returns `(code, status)` tuples. 2-byte records for `0x13`/`0x17`; 3-byte records for `0x18`. `[]` is ambiguous: no DTCs or a failed request. Partial data sets `ERR_HEADER`. Invalid selector raises `ValueError` only when connected. |
@@ -427,6 +427,10 @@ to 2000 ms for a response, then 55 ms P3. A silent-bus attempt is ~2.1-2.2 s.
 
 Retry counts: start communication 1; Kawasaki diagnostic session 3; stop communication 3; all
 other requests 3. `handle_request()` clamps `attempts` to 1..3. There is no backoff.
+
+With `request_sensors(only=...)`, the Kawasaki worst case scales with the number of selected
+requests: each selected sensor has the `handle_request()` budget above (~6.3-6.5 s), so one
+sensor is about 6.5 s and all seven are ~44-45 s. Suzuki is always one request (~6.5 s).
 
 **Watchdog guidance `[P]`:**
 - Budget for the worst case above; feed the watchdog before/after long calls or disable it during

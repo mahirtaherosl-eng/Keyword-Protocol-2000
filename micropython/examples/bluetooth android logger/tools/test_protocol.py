@@ -136,6 +136,7 @@ class FakeTime:
 
 
 app.time = FakeTime
+DEFAULT_SENSORS = app.SUPPORTED_SENSOR_KEYS
 
 
 class FakeEcu:
@@ -169,6 +170,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(sample["clutch"])
         self.assertIsNone(sample["voltage"])
 
+    def test_build_sample_subset(self):
+        raw = app.build_sample(FakeEcu(), 7, ("rpm", "speed"))
+        sample = json.loads(raw.decode())
+        self.assertEqual(
+            list(sample.keys()), ["seq", "ms", "rpm", "speed"]
+        )
+        self.assertEqual(sample["rpm"], 3125.46)
+        self.assertNotIn("ect", sample)
+
+    def test_simulated_ecu_accepts_subset(self):
+        ecu = app.FakeEcu()
+        self.assertTrue(ecu.connect())
+        self.assertTrue(ecu.request_sensors(only=("rpm", "speed")))
+        self.assertTrue(ecu.keep_alive())
+
     def test_chunks_at_default_mtu(self):
         data = bytes(range(60))
         chunks = app.chunk_data(data, 23)
@@ -197,62 +213,120 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(payload[2:].decode(), "KWP2000-C6")
 
     def test_control_valid(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval","ms":3000}\n', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval","ms":3000}\n', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(interval, 3000)
+        self.assertEqual(sensors, DEFAULT_SENSORS)
+        self.assertEqual(ack["ack"], "interval")
+        self.assertEqual(ack["ms"], 3000)
+        self.assertEqual(ack["interval_ms"], 3000)
+        self.assertEqual(ack["brand"], app.BRAND)
         self.assertEqual(
-            ack, {"ack": "interval", "ms": 3000, "ok": True}
+            ack["supported"], list(app.SUPPORTED_SENSOR_KEYS)
         )
+        self.assertTrue(ack["ok"])
+
+    def test_control_auto(self):
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval","ms":0}', 2000, DEFAULT_SENSORS
+        )
+        self.assertEqual(interval, 0)
+        self.assertEqual(sensors, DEFAULT_SENSORS)
+        self.assertTrue(ack["ok"])
 
     def test_control_accepts_minimum(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval","ms":250}', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval","ms":250}', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(app.MIN_POLL_INTERVAL_MS, 250)
         self.assertEqual(interval, 250)
         self.assertTrue(ack["ok"])
 
     def test_control_clamps_below_minimum(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval","ms":249}', 2000
-        )
-        self.assertEqual(interval, app.MIN_POLL_INTERVAL_MS)
-        self.assertTrue(ack["ok"])
-
-    def test_control_clamps_low(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval","ms":1}', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval","ms":249}', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(interval, app.MIN_POLL_INTERVAL_MS)
         self.assertTrue(ack["ok"])
 
     def test_control_clamps_high(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval","ms":999999}', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval","ms":999999}', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(interval, app.MAX_POLL_INTERVAL_MS)
         self.assertTrue(ack["ok"])
 
     def test_control_invalid_json(self):
-        interval, ack = app.handle_control(b"not json", 2000)
+        interval, sensors, ack = app.handle_control(
+            b"not json", 2000, DEFAULT_SENSORS
+        )
         self.assertEqual(interval, 2000)
+        self.assertEqual(sensors, DEFAULT_SENSORS)
         self.assertFalse(ack["ok"])
         self.assertIn("error", ack)
 
     def test_control_unknown_command(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"reboot"}', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"reboot"}', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(interval, 2000)
         self.assertFalse(ack["ok"])
 
     def test_control_invalid_ms(self):
-        interval, ack = app.handle_control(
-            b'{"cmd":"interval"}', 2000
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"interval"}', 2000, DEFAULT_SENSORS
         )
         self.assertEqual(interval, 2000)
         self.assertFalse(ack["ok"])
+
+    def test_control_sensors_filters_unsupported(self):
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"sensors","keys":["rpm","speed","clutch"]}',
+            2000, DEFAULT_SENSORS,
+        )
+        self.assertEqual(interval, 2000)
+        self.assertEqual(sensors, ("rpm", "speed"))
+        self.assertEqual(ack["sensors"], ["rpm", "speed"])
+        self.assertTrue(ack["ok"])
+
+    def test_control_rejects_no_supported_sensors(self):
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"sensors","keys":["clutch","stps"]}',
+            2000, DEFAULT_SENSORS,
+        )
+        self.assertEqual(interval, 2000)
+        self.assertEqual(sensors, DEFAULT_SENSORS)
+        self.assertFalse(ack["ok"])
+        self.assertIn("error", ack)
+
+    def test_control_config_auto_subset(self):
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"config","interval_ms":0,'
+            b'"sensors":["rpm","speed"]}',
+            2000, DEFAULT_SENSORS,
+        )
+        self.assertEqual(interval, 0)
+        self.assertEqual(sensors, ("rpm", "speed"))
+        self.assertEqual(ack["ack"], "config")
+        self.assertEqual(ack["interval_ms"], 0)
+        self.assertEqual(ack["sensors"], ["rpm", "speed"])
+        self.assertTrue(ack["ok"])
+
+    def test_control_config_rejects_empty_sensors(self):
+        interval, sensors, ack = app.handle_control(
+            b'{"cmd":"config","interval_ms":0,"sensors":[]}',
+            2000, DEFAULT_SENSORS,
+        )
+        self.assertEqual(interval, 2000)
+        self.assertEqual(sensors, DEFAULT_SENSORS)
+        self.assertFalse(ack["ok"])
+
+    def test_kawasaki_supported_keys(self):
+        self.assertEqual(
+            app.SUPPORTED_SENSOR_KEYS,
+            ("gps", "rpm", "speed", "tps", "iap", "iat", "ect"),
+        )
 
 
 class CrossFileTests(unittest.TestCase):
@@ -282,11 +356,12 @@ class CrossFileTests(unittest.TestCase):
         readme = self.read(README_PATH)
 
         self.assertIn(
-            "intArrayOf(250, 500, 1000, 2000, 5000, 10000)", kotlin
+            "intArrayOf(0, 250, 500, 1000, 2000, 5000, 10000)", kotlin
         )
         self.assertIn("MIN_POLL_INTERVAL_MS = 250", esp32)
         self.assertIn("250-10000", receiver)
         self.assertIn("250-10000", readme)
+        self.assertIn("Auto", readme)
 
         root = ET.parse(STRINGS_PATH).getroot()
         array = next(
@@ -295,8 +370,14 @@ class CrossFileTests(unittest.TestCase):
         )
         labels = [item.text for item in array.findall("item")]
         self.assertEqual(
-            labels, ["0.25 s", "0.5 s", "1 s", "2 s", "5 s", "10 s"]
+            labels,
+            ["Auto (fastest)", "0.25 s", "0.5 s", "1 s", "2 s", "5 s", "10 s"],
         )
+
+    def test_sensor_keys_match_kotlin(self):
+        kotlin = self.read(os.path.join(KOTLIN_DIR, "SensorKeys.kt"))
+        for key in app.SENSOR_KEYS:
+            self.assertIn('"%s"' % key, kotlin)
 
 
 if __name__ == "__main__":

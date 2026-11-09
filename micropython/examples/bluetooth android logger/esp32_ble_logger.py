@@ -68,9 +68,10 @@ MAX_POLL_INTERVAL_MS = 10000
 KEEPALIVE_INTERVAL_MS = 1000  # must stay <= 2000
 
 # The interval is the minimum spacing between poll starts, not a guaranteed
-# sample rate. Suzuki request_sensors() takes ~200-250 ms. Kawasaki sends
-# seven sequential requests and needs ~1.1-1.3 s per sample, so lower
-# settings simply poll back-to-back on a Kawasaki.
+# sample rate. An interval of 0 means Auto: poll back-to-back. Suzuki always
+# requests one block (~200-250 ms). Kawasaki sends one request per selected
+# sensor, so selecting fewer sensors shortens the cycle (all seven take
+# ~1.1-1.3 s).
 LOOP_SLEEP_MS = 20
 RECONNECT_MIN_MS = 2000
 RECONNECT_MAX_MS = 60000
@@ -86,6 +87,18 @@ CONTROL_UUID = "6b773230-2d4b-5750-8002-6b7770323030"
 
 SENSOR_KEYS = ("gps", "clutch", "rpm", "speed", "tps",
                "stps", "iap", "iat", "ect", "voltage")
+
+# Kawasaki has no clutch, secondary TPS or voltage readings. The others are
+# obtained in a single Suzuki block, so all ten are supported there.
+IS_KAWASAKI = ((isinstance(BRAND, str) and BRAND.lower() == "kawasaki")
+               or BRAND == KWP2000.KAWASAKI)
+if IS_KAWASAKI:
+    SUPPORTED_SENSOR_KEYS = ("gps", "rpm", "speed", "tps",
+                             "iap", "iat", "ect")
+else:
+    SUPPORTED_SENSOR_KEYS = SENSOR_KEYS
+BRAND_NAME = ("kawasaki" if IS_KAWASAKI
+              else (BRAND.lower() if isinstance(BRAND, str) else "suzuki"))
 
 # BLE event ids are not exported by the bluetooth module.
 _IRQ_CENTRAL_CONNECT = 1
@@ -134,39 +147,99 @@ def _rounded(value):
     return value
 
 
-def build_sample(ecu, seq):
+def build_sample(ecu, seq, keys=SENSOR_KEYS):
     """Return one newline-terminated JSON sample as bytes."""
     sensors = ecu.sensors
     obj = {"seq": seq, "ms": time.ticks_ms()}
-    for key in SENSOR_KEYS:
+    for key in keys:
         obj[key] = _rounded(sensors.get(key))
     return (json.dumps(obj) + "\n").encode()
 
 
-def handle_control(raw, current_interval):
-    """Apply one control command and return (interval_ms, ack_dict)."""
+def _ack(ok, command, interval_ms, sensors, error=None):
+    """Build an ACK that always carries the ESP32's capabilities."""
+    ack = {
+        "ack": command,
+        "ok": ok,
+        "brand": BRAND_NAME,
+        "interval_ms": interval_ms,
+        "ms": interval_ms,                 # legacy field
+        "sensors": list(sensors),
+        "supported": list(SUPPORTED_SENSOR_KEYS),
+    }
+    if error is not None:
+        ack["error"] = error
+    return ack
+
+
+def _parse_interval(value):
+    if value is None:
+        raise ValueError("invalid interval")
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("invalid interval")
+    if value == 0:
+        return 0                           # Auto: poll back-to-back
+    return max(MIN_POLL_INTERVAL_MS, min(MAX_POLL_INTERVAL_MS, value))
+
+
+def _parse_sensors(keys):
+    if not isinstance(keys, (list, tuple)):
+        raise ValueError("invalid sensors")
+    requested = set()
+    for key in keys:
+        if not isinstance(key, str):
+            raise ValueError("invalid sensor")
+        requested.add(key)
+    selected = tuple(k for k in SUPPORTED_SENSOR_KEYS if k in requested)
+    if not selected:
+        raise ValueError("no supported sensors")
+    return selected
+
+
+def handle_control(raw, current_interval, current_sensors):
+    """Apply one control command.
+
+    Returns ``(interval_ms, sensors_tuple, ack_dict)``. An interval of 0 means
+    Auto (poll back-to-back). Invalid commands leave the config unchanged.
+    """
     try:
         text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
         command = json.loads(text.strip())
     except (ValueError, TypeError):
-        return current_interval, {
-            "ack": "interval", "ok": False, "error": "invalid json",
-        }
+        return current_interval, current_sensors, _ack(
+            False, "config", current_interval, current_sensors,
+            "invalid json",
+        )
 
-    if not isinstance(command, dict) or command.get("cmd") != "interval":
-        return current_interval, {
-            "ack": "interval", "ok": False, "error": "unknown command",
-        }
+    if not isinstance(command, dict):
+        return current_interval, current_sensors, _ack(
+            False, "config", current_interval, current_sensors,
+            "invalid command",
+        )
 
+    cmd = command.get("cmd")
+    interval = current_interval
+    sensors = current_sensors
     try:
-        value = int(command.get("ms"))
-    except (TypeError, ValueError):
-        return current_interval, {
-            "ack": "interval", "ok": False, "error": "invalid ms",
-        }
+        if cmd not in ("config", "interval", "sensors"):
+            raise ValueError("unknown command")
+        if cmd in ("config", "interval"):
+            value = command.get("interval_ms", command.get("ms"))
+            if cmd == "interval" or value is not None:
+                interval = _parse_interval(value)
+        if cmd in ("config", "sensors"):
+            keys = command.get("sensors", command.get("keys"))
+            if cmd == "sensors" or keys is not None:
+                sensors = _parse_sensors(keys)
+    except ValueError as exc:
+        return current_interval, current_sensors, _ack(
+            False, cmd or "config", current_interval, current_sensors,
+            str(exc),
+        )
 
-    value = max(MIN_POLL_INTERVAL_MS, min(MAX_POLL_INTERVAL_MS, value))
-    return value, {"ack": "interval", "ms": value, "ok": True}
+    return interval, sensors, _ack(True, cmd, interval, sensors)
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +391,7 @@ class FakeEcu:
     def keep_alive(self, interval_ms=0):
         return self.connected
 
-    def request_sensors(self):
+    def request_sensors(self, only=None):
         if not self.connected:
             return False
         t = time.ticks_ms() // 1000
@@ -371,6 +444,7 @@ def create_ecu():
 def run(ecu, ble_stream):
     """Poll the ECU while a central is connected; keep it alive otherwise."""
     poll_interval_ms = POLL_INTERVAL_MS
+    selected_sensors = SUPPORTED_SENSOR_KEYS
     next_connect = time.ticks_ms()
     next_poll = time.ticks_ms()
     backoff = RECONNECT_MIN_MS
@@ -380,10 +454,11 @@ def run(ecu, ble_stream):
         command = ble_stream.pending_command
         if command is not None:
             ble_stream.pending_command = None
-            poll_interval_ms, ack = handle_control(command, poll_interval_ms)
+            poll_interval_ms, selected_sensors, ack = handle_control(
+                command, poll_interval_ms, selected_sensors)
             next_poll = time.ticks_add(time.ticks_ms(), poll_interval_ms)
             ble_stream.send((json.dumps(ack) + "\n").encode())
-            print("control:", ack)
+            print("config:", ack)
 
         if not ble_stream.advertising and not ble_stream.connected:
             ble_stream._try_advertise()
@@ -427,9 +502,11 @@ def run(ecu, ble_stream):
 
         if time.ticks_diff(time.ticks_ms(), next_poll) >= 0:
             started = time.ticks_ms()
-            if ecu.request_sensors():
+            if ecu.request_sensors(only=selected_sensors):
                 seq += 1
-                ble_stream.send(build_sample(ecu, seq))
+                ble_stream.send(
+                    build_sample(ecu, seq, selected_sensors)
+                )
             else:
                 _log_errors("sensor poll failed", ecu)
 
